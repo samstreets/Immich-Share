@@ -1,5 +1,5 @@
 const fetch = require('node-fetch');
-const { getDb } = require('../db');
+const { getDb } = require('./db');
 
 function getImmichConfig() {
   const db = getDb();
