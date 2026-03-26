@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   immich-share:
     image: ${DOCKER_IMAGE:-immich-share:latest}
