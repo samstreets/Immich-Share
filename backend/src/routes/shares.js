@@ -112,25 +112,33 @@ router.patch('/:id', async (req, res) => {
     passwordHash = await bcrypt.hash(password, 10);
   }
 
+  // Build update explicitly so we can clear nullable fields (COALESCE prevents clearing)
+  const updatedName        = name !== undefined ? name : share.name;
+  const updatedDescription = description !== undefined ? description : share.description;
+  const updatedExpiresAt   = expires_at !== undefined ? (expires_at || null) : share.expires_at;
+  const updatedDownload    = allow_download !== undefined ? (allow_download ? 1 : 0) : share.allow_download;
+  const updatedMetadata    = show_metadata !== undefined ? (show_metadata ? 1 : 0) : share.show_metadata;
+  const updatedActive      = is_active !== undefined ? (is_active ? 1 : 0) : share.is_active;
+
   db.prepare(`
     UPDATE shares SET
-      name = COALESCE(?, name),
-      description = COALESCE(?, description),
+      name = ?,
+      description = ?,
       password_hash = ?,
       expires_at = ?,
-      allow_download = COALESCE(?, allow_download),
-      show_metadata = COALESCE(?, show_metadata),
-      is_active = COALESCE(?, is_active),
+      allow_download = ?,
+      show_metadata = ?,
+      is_active = ?,
       updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
   `).run(
-    name || null,
-    description !== undefined ? description : null,
+    updatedName,
+    updatedDescription,
     passwordHash,
-    expires_at !== undefined ? expires_at : share.expires_at,
-    allow_download !== undefined ? (allow_download ? 1 : 0) : null,
-    show_metadata !== undefined ? (show_metadata ? 1 : 0) : null,
-    is_active !== undefined ? (is_active ? 1 : 0) : null,
+    updatedExpiresAt,
+    updatedDownload,
+    updatedMetadata,
+    updatedActive,
     req.params.id
   );
 

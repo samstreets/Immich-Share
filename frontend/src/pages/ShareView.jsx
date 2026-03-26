@@ -1,6 +1,7 @@
-import React, { useEffect, useState, useCallback } from 'react'
+import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { useParams } from 'react-router-dom'
 
+// ── Password gate ─────────────────────────────────────────────────────────────
 function PasswordGate({ shareInfo, onUnlock }) {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -18,7 +19,7 @@ function PasswordGate({ shareInfo, onUnlock }) {
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
-      onUnlock(password, data)
+      onUnlock(data)
     } catch (err) {
       setError(err.message)
     } finally {
@@ -81,7 +82,8 @@ function PasswordGate({ shareInfo, onUnlock }) {
   )
 }
 
-function LightBox({ asset, password, shareId, onClose, onPrev, onNext }) {
+// ── Lightbox ──────────────────────────────────────────────────────────────────
+function LightBox({ asset, token, onClose, onPrev, onNext, total, index }) {
   useEffect(() => {
     function onKey(e) {
       if (e.key === 'Escape') onClose()
@@ -92,109 +94,126 @@ function LightBox({ asset, password, shareId, onClose, onPrev, onNext }) {
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose, onPrev, onNext])
 
-  const encodedPw = encodeURIComponent(password)
+  const t = encodeURIComponent(token)
   const isVideo = asset.type === 'VIDEO'
 
   return (
     <div
       style={{
         position: 'fixed', inset: 0,
-        background: 'rgba(0,0,0,0.95)',
+        background: 'rgba(0,0,0,0.96)',
         zIndex: 200,
         display: 'flex',
+        flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
       }}
       onClick={e => e.target === e.currentTarget && onClose()}
     >
-      {/* Controls */}
-      <button
-        onClick={onClose}
-        style={{
-          position: 'absolute', top: 16, right: 16,
-          background: 'rgba(255,255,255,0.1)',
-          color: '#fff', border: 'none', borderRadius: '50%',
-          width: 40, height: 40, fontSize: '1.2rem', cursor: 'pointer',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}
-      >✕</button>
-
-      <button
-        onClick={onPrev}
-        style={{
-          position: 'absolute', left: 16, top: '50%', transform: 'translateY(-50%)',
-          background: 'rgba(255,255,255,0.1)',
-          color: '#fff', border: 'none', borderRadius: '50%',
-          width: 44, height: 44, fontSize: '1.4rem', cursor: 'pointer',
-        }}
-      >‹</button>
-
-      <button
-        onClick={onNext}
-        style={{
-          position: 'absolute', right: 16, top: '50%', transform: 'translateY(-50%)',
-          background: 'rgba(255,255,255,0.1)',
-          color: '#fff', border: 'none', borderRadius: '50%',
-          width: 44, height: 44, fontSize: '1.4rem', cursor: 'pointer',
-        }}
-      >›</button>
-
-      {/* Media */}
-      <div style={{ maxWidth: '90vw', maxHeight: '90vh', position: 'relative' }}>
-        {isVideo ? (
-          <video
-            src={`${asset.videoUrl}?p=${encodedPw}`}
-            controls
-            autoPlay
-            style={{ maxWidth: '90vw', maxHeight: '85vh', borderRadius: 8 }}
-          />
-        ) : (
-          <img
-            src={`${asset.previewUrl}?p=${encodedPw}`}
-            alt={asset.originalFileName || ''}
-            style={{ maxWidth: '90vw', maxHeight: '85vh', borderRadius: 8, objectFit: 'contain' }}
-          />
-        )}
-
-        {/* Download + metadata */}
-        <div style={{
-          position: 'absolute', bottom: -48, left: 0, right: 0,
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          gap: 12,
-        }}>
-          {asset.originalFileName && (
-            <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.8rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {asset.originalFileName}
-            </span>
-          )}
+      {/* Top bar */}
+      <div style={{
+        position: 'absolute', top: 0, left: 0, right: 0,
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '12px 16px',
+        background: 'linear-gradient(to bottom, rgba(0,0,0,0.7), transparent)',
+      }}>
+        <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.8rem' }}>
+          {index + 1} / {total}
+        </span>
+        <div style={{ display: 'flex', gap: 8 }}>
           {asset.originalUrl && (
             <a
-              href={`${asset.originalUrl}?p=${encodedPw}`}
+              href={`${asset.originalUrl}?t=${t}`}
               download
               className="btn btn-secondary btn-sm"
-              style={{ flexShrink: 0 }}
+              style={{ color: '#fff', borderColor: 'rgba(255,255,255,0.2)' }}
+              onClick={e => e.stopPropagation()}
             >
               ⬇ Download
             </a>
           )}
+          <button
+            onClick={onClose}
+            style={{
+              background: 'rgba(255,255,255,0.1)',
+              color: '#fff', border: 'none', borderRadius: 6,
+              padding: '6px 12px', cursor: 'pointer', fontSize: '0.875rem',
+            }}
+          >✕ Close</button>
         </div>
       </div>
+
+      {/* Prev / Next */}
+      {total > 1 && (
+        <>
+          <button onClick={onPrev} style={{
+            position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)',
+            background: 'rgba(255,255,255,0.1)', color: '#fff', border: 'none',
+            borderRadius: '50%', width: 48, height: 48, fontSize: '1.5rem',
+            cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>‹</button>
+          <button onClick={onNext} style={{
+            position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)',
+            background: 'rgba(255,255,255,0.1)', color: '#fff', border: 'none',
+            borderRadius: '50%', width: 48, height: 48, fontSize: '1.5rem',
+            cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>›</button>
+        </>
+      )}
+
+      {/* Media */}
+      <div style={{ maxWidth: '92vw', maxHeight: '82vh' }}>
+        {isVideo ? (
+          <video
+            key={asset.id}
+            src={`${asset.videoUrl}?t=${t}`}
+            controls
+            autoPlay
+            style={{ maxWidth: '92vw', maxHeight: '82vh', borderRadius: 6, outline: 'none' }}
+          />
+        ) : (
+          <img
+            key={asset.id}
+            src={`${asset.previewUrl}?t=${t}`}
+            alt={asset.originalFileName || ''}
+            style={{ maxWidth: '92vw', maxHeight: '82vh', borderRadius: 6, objectFit: 'contain', display: 'block' }}
+          />
+        )}
+      </div>
+
+      {/* Metadata strip */}
+      {(asset.originalFileName || asset.fileCreatedAt) && (
+        <div style={{
+          position: 'absolute', bottom: 0, left: 0, right: 0,
+          padding: '12px 20px',
+          background: 'linear-gradient(to top, rgba(0,0,0,0.7), transparent)',
+          color: 'rgba(255,255,255,0.55)',
+          fontSize: '0.78rem',
+          display: 'flex', gap: 20,
+        }}>
+          {asset.originalFileName && <span>{asset.originalFileName}</span>}
+          {asset.fileCreatedAt && (
+            <span>{new Date(asset.fileCreatedAt).toLocaleDateString(undefined, { dateStyle: 'medium' })}</span>
+          )}
+        </div>
+      )}
     </div>
   )
 }
 
+// ── Main share view ───────────────────────────────────────────────────────────
 export default function ShareView() {
   const { shareId } = useParams()
   const [shareInfo, setShareInfo] = useState(null)
   const [infoLoading, setInfoLoading] = useState(true)
   const [infoError, setInfoError] = useState('')
-  const [password, setPassword] = useState('')
-  const [shareData, setShareData] = useState(null)
+  const [shareData, setShareData] = useState(null)   // from /verify
   const [assets, setAssets] = useState([])
   const [assetsLoading, setAssetsLoading] = useState(false)
-  const [lightbox, setLightbox] = useState(null) // index
+  const [assetsError, setAssetsError] = useState('')
+  const [lightbox, setLightbox] = useState(null)      // index
 
-  // Load share info (name, status)
+  // Load public share info
   useEffect(() => {
     fetch(`/api/public/info/${shareId}`)
       .then(r => r.json())
@@ -206,26 +225,31 @@ export default function ShareView() {
       .finally(() => setInfoLoading(false))
   }, [shareId])
 
-  const handleUnlock = useCallback(async (pw, info) => {
-    setPassword(pw)
-    setShareData(info)
+  // Called after successful password entry — shareData includes sessionToken
+  const handleUnlock = useCallback(async (data) => {
+    setShareData(data)
     setAssetsLoading(true)
+    setAssetsError('')
     try {
       const res = await fetch(`/api/public/content/${shareId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password: pw }),
+        body: JSON.stringify({ sessionToken: data.sessionToken }),
       })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error)
-      setAssets(data.assets)
+      const body = await res.json()
+      if (!res.ok) throw new Error(body.error)
+      setAssets(body.assets)
     } catch (err) {
-      alert('Failed to load photos: ' + err.message)
+      setAssetsError(err.message)
     } finally {
       setAssetsLoading(false)
     }
   }, [shareId])
 
+  const token = shareData?.sessionToken || ''
+  const t = encodeURIComponent(token)
+
+  // ── Render states ───────────────────────────────────────────────────────────
   if (infoLoading) {
     return (
       <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -262,31 +286,28 @@ export default function ShareView() {
     return <PasswordGate shareInfo={shareInfo} onUnlock={handleUnlock} />
   }
 
-  const encodedPw = encodeURIComponent(password)
-
   return (
-    <div style={{ minHeight: '100vh', padding: '0 0 60px' }}>
+    <div style={{ minHeight: '100vh', paddingBottom: 60 }}>
       {/* Header */}
       <div style={{
-        padding: '20px 32px',
+        padding: '16px 24px',
         borderBottom: '1px solid var(--border)',
         background: 'var(--bg2)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        flexWrap: 'wrap',
-        gap: 12,
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        flexWrap: 'wrap', gap: 12, position: 'sticky', top: 0, zIndex: 10,
       }}>
         <div>
-          <h1 style={{ fontSize: '1.2rem', fontWeight: 600 }}>{shareData.name}</h1>
+          <h1 style={{ fontSize: '1.1rem', fontWeight: 600 }}>{shareData.name}</h1>
           {shareData.description && (
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginTop: 2 }}>{shareData.description}</p>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginTop: 2 }}>{shareData.description}</p>
           )}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <span style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>{assets.length} items</span>
+          <span style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>
+            {assets.length} {assets.length === 1 ? 'item' : 'items'}
+          </span>
           {shareData.allow_download && assets.length > 0 && (
-            <span className="badge badge-green">⬇ Downloads allowed</span>
+            <span className="badge badge-green">⬇ Downloads on</span>
           )}
         </div>
       </div>
@@ -296,18 +317,21 @@ export default function ShareView() {
         <div style={{ display: 'flex', justifyContent: 'center', padding: '80px 0' }}>
           <span className="loading-spinner" style={{ width: 32, height: 32 }} />
         </div>
+      ) : assetsError ? (
+        <div style={{ maxWidth: 480, margin: '60px auto', padding: '0 20px' }}>
+          <div className="error-msg">{assetsError}</div>
+        </div>
       ) : assets.length === 0 ? (
         <div style={{ textAlign: 'center', padding: '80px 20px', color: 'var(--text-muted)' }}>
           No photos found in this share.
         </div>
       ) : (
         <div style={{
-          padding: '24px 20px',
+          padding: '16px',
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
-          gap: 6,
-          maxWidth: 1400,
-          margin: '0 auto',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
+          gap: 4,
+          maxWidth: 1600, margin: '0 auto',
         }}>
           {assets.map((asset, i) => (
             <div
@@ -315,7 +339,7 @@ export default function ShareView() {
               onClick={() => setLightbox(i)}
               style={{
                 aspectRatio: '1',
-                borderRadius: 6,
+                borderRadius: 4,
                 overflow: 'hidden',
                 cursor: 'pointer',
                 background: 'var(--bg3)',
@@ -323,25 +347,26 @@ export default function ShareView() {
               }}
             >
               <img
-                src={`${asset.thumbnailUrl}?p=${encodedPw}`}
+                src={`${asset.thumbnailUrl}?t=${t}`}
                 loading="lazy"
                 alt=""
                 style={{
-                  width: '100%',
-                  height: '100%',
-                  objectFit: 'cover',
-                  transition: 'transform 0.2s',
+                  width: '100%', height: '100%', objectFit: 'cover',
+                  transition: 'transform 0.2s, opacity 0.2s',
+                  opacity: 0,
                 }}
-                onMouseEnter={e => e.target.style.transform = 'scale(1.04)'}
+                onLoad={e => { e.target.style.opacity = 1 }}
+                onMouseEnter={e => e.target.style.transform = 'scale(1.05)'}
                 onMouseLeave={e => e.target.style.transform = 'scale(1)'}
               />
               {asset.type === 'VIDEO' && (
                 <div style={{
-                  position: 'absolute', top: 8, right: 8,
-                  background: 'rgba(0,0,0,0.6)',
-                  borderRadius: 4, padding: '2px 6px',
+                  position: 'absolute', bottom: 6, right: 6,
+                  background: 'rgba(0,0,0,0.65)',
+                  borderRadius: 4, padding: '2px 7px',
                   fontSize: '0.7rem', color: '#fff',
-                }}>▶ {asset.duration}</div>
+                  display: 'flex', alignItems: 'center', gap: 4,
+                }}>▶ {asset.duration || 'video'}</div>
               )}
             </div>
           ))}
@@ -352,21 +377,16 @@ export default function ShareView() {
       {lightbox !== null && (
         <LightBox
           asset={assets[lightbox]}
-          password={password}
-          shareId={shareId}
+          token={token}
+          index={lightbox}
+          total={assets.length}
           onClose={() => setLightbox(null)}
           onPrev={() => setLightbox(i => (i - 1 + assets.length) % assets.length)}
           onNext={() => setLightbox(i => (i + 1) % assets.length)}
         />
       )}
 
-      {/* Footer */}
-      <div style={{
-        textAlign: 'center',
-        marginTop: 40,
-        color: 'var(--text-dim)',
-        fontSize: '0.78rem',
-      }}>
+      <div style={{ textAlign: 'center', marginTop: 40, color: 'var(--text-dim)', fontSize: '0.75rem' }}>
         Shared via {shareInfo.appName}
       </div>
     </div>

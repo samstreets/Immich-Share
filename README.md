@@ -99,6 +99,8 @@ Set `EXTERNAL_URL=https://share.yourdomain.com` in your `.env`.
 - Pull requests → builds but does **not** push
 - Updates your Docker Hub repo description from this README
 
+> **Note on multi-arch:** The workflow builds each platform on a **native runner** (`ubuntu-latest` for amd64, `ubuntu-24.04-arm` for arm64) instead of QEMU emulation. This prevents timeout failures from `better-sqlite3` compiling native bindings under emulation. `ubuntu-24.04-arm` is free for public repos. For **private repos**, add a self-hosted arm64 runner or remove `linux/arm64` from the matrix.
+
 ### Releasing a new version
 
 ```bash

@@ -75,15 +75,19 @@ async function proxyAssetOriginal(assetId) {
   return response;
 }
 
-async function proxyAssetVideo(assetId) {
+async function proxyAssetVideo(assetId, rangeHeader) {
   const { url, apiKey } = getImmichConfig();
   if (!url || !apiKey) throw new Error('Immich not configured');
 
-  const response = await fetch(`${url}/api/assets/${assetId}/video/playback`, {
-    headers: { 'x-api-key': apiKey },
-  });
+  const headers = { 'x-api-key': apiKey };
+  if (rangeHeader) headers['Range'] = rangeHeader;
 
-  if (!response.ok) throw new Error(`Failed to fetch video: ${response.status}`);
+  const response = await fetch(`${url}/api/assets/${assetId}/video/playback`, { headers });
+
+  // 206 Partial Content is fine — don't treat as error
+  if (!response.ok && response.status !== 206) {
+    throw new Error(`Failed to fetch video: ${response.status}`);
+  }
   return response;
 }
 
