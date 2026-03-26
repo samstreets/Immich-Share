@@ -6,6 +6,7 @@ import AdminLayout from './pages/AdminLayout.jsx'
 import Dashboard from './pages/Dashboard.jsx'
 import SharesPage from './pages/SharesPage.jsx'
 import SettingsPage from './pages/SettingsPage.jsx'
+import LogsPage from './pages/LogsPage.jsx'
 import ShareView from './pages/ShareView.jsx'
 
 function ProtectedRoute({ children }) {
@@ -26,6 +27,7 @@ export default function App() {
           <Route path="/admin" element={<ProtectedRoute><AdminLayout /></ProtectedRoute>}>
             <Route index element={<Dashboard />} />
             <Route path="shares" element={<SharesPage />} />
+            <Route path="logs" element={<LogsPage />} />
             <Route path="settings" element={<SettingsPage />} />
           </Route>
 

@@ -24,7 +24,7 @@ router.get('/settings', (req, res) => {
 // Update settings
 router.put('/settings', (req, res) => {
   const db = getDb();
-  const allowed = ['immich_url', 'immich_api_key', 'external_url', 'app_name'];
+  const allowed = ['immich_url', 'immich_api_key', 'external_url', 'app_name', 'allowed_origins'];
 
   const update = db.prepare('INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)');
 
@@ -93,6 +93,103 @@ router.get('/stats', (req, res) => {
   const recentViews = db.prepare("SELECT COUNT(*) as count FROM access_logs WHERE accessed_at > datetime('now', '-7 days')").get().count;
 
   res.json({ totalShares, activeShares, expiredShares, totalViews, recentViews });
+});
+
+// ── Global access logs ────────────────────────────────────────────────────────
+
+// GET /admin/logs — paginated, filterable
+router.get('/logs', (req, res) => {
+  const db = getDb();
+  const limit  = Math.min(parseInt(req.query.limit  || '100', 10), 500);
+  const offset = parseInt(req.query.offset || '0', 10);
+  const action = req.query.action || null;   // filter by action
+  const search = req.query.search || null;   // filter by share name / ip
+
+  let where = '';
+  const params = [];
+
+  if (action) {
+    where += ' AND l.action = ?';
+    params.push(action);
+  }
+  if (search) {
+    where += ' AND (l.share_name LIKE ? OR l.ip_address LIKE ? OR s.name LIKE ?)';
+    const like = `%${search}%`;
+    params.push(like, like, like);
+  }
+
+  const rows = db.prepare(`
+    SELECT
+      l.id,
+      l.share_id,
+      COALESCE(l.share_name, s.name, l.share_id) AS share_name,
+      l.ip_address,
+      l.user_agent,
+      l.action,
+      l.accessed_at
+    FROM access_logs l
+    LEFT JOIN shares s ON s.id = l.share_id
+    WHERE 1=1 ${where}
+    ORDER BY l.accessed_at DESC
+    LIMIT ? OFFSET ?
+  `).all(...params, limit, offset);
+
+  const totalRow = db.prepare(`
+    SELECT COUNT(*) as count
+    FROM access_logs l
+    LEFT JOIN shares s ON s.id = l.share_id
+    WHERE 1=1 ${where}
+  `).get(...params);
+
+  res.json({ logs: rows, total: totalRow.count, limit, offset });
+});
+
+// GET /admin/logs/summary — action breakdown + top shares
+router.get('/logs/summary', (req, res) => {
+  const db = getDb();
+
+  const byAction = db.prepare(`
+    SELECT action, COUNT(*) as count
+    FROM access_logs
+    GROUP BY action
+    ORDER BY count DESC
+  `).all();
+
+  const topShares = db.prepare(`
+    SELECT
+      l.share_id,
+      COALESCE(l.share_name, s.name, l.share_id) AS share_name,
+      COUNT(*) AS total,
+      SUM(CASE WHEN l.action = 'view' THEN 1 ELSE 0 END) AS views,
+      SUM(CASE WHEN l.action = 'upload' THEN 1 ELSE 0 END) AS uploads
+    FROM access_logs l
+    LEFT JOIN shares s ON s.id = l.share_id
+    GROUP BY l.share_id
+    ORDER BY total DESC
+    LIMIT 10
+  `).all();
+
+  const byDay = db.prepare(`
+    SELECT
+      date(accessed_at) AS day,
+      COUNT(*) AS count
+    FROM access_logs
+    WHERE accessed_at >= date('now', '-30 days')
+    GROUP BY day
+    ORDER BY day ASC
+  `).all();
+
+  res.json({ byAction, topShares, byDay });
+});
+
+// DELETE /admin/logs — purge all logs older than N days
+router.delete('/logs', (req, res) => {
+  const db = getDb();
+  const days = parseInt(req.query.days || '90', 10);
+  const result = db.prepare(
+    `DELETE FROM access_logs WHERE accessed_at < datetime('now', '-' || ? || ' days')`
+  ).run(days);
+  res.json({ deleted: result.changes });
 });
 
 module.exports = router;

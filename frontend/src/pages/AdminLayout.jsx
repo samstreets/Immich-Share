@@ -43,9 +43,10 @@ export default function AdminLayout() {
         {/* Nav */}
         <nav style={{ flex: 1, padding: '12px 10px' }}>
           {[
-            { to: '/admin', label: 'Dashboard', icon: '◈', end: true },
-            { to: '/admin/shares', label: 'Shares', icon: '⬡' },
-            { to: '/admin/settings', label: 'Settings', icon: '⚙' },
+            { to: '/admin',          label: 'Dashboard', icon: '◈', end: true },
+            { to: '/admin/shares',   label: 'Shares',    icon: '⬡' },
+            { to: '/admin/logs',     label: 'Logs',      icon: '📋' },
+            { to: '/admin/settings', label: 'Settings',  icon: '⚙' },
           ].map(({ to, label, icon, end }) => (
             <NavLink key={to} to={to} end={end} style={({ isActive }) => ({
               display: 'flex',

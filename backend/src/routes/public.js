@@ -6,13 +6,20 @@ const { makeToken, verifyToken } = require('../shareSession');
 
 const router = express.Router();
 
-function logAccess(shareId, req, action = 'view') {
+function logAccess(share, req, action = 'view') {
   try {
     const db = getDb();
-    db.prepare('INSERT INTO access_logs (share_id, ip_address, user_agent, action) VALUES (?, ?, ?, ?)')
-      .run(shareId, req.ip, req.headers['user-agent'] || '', action);
+    db.prepare(
+      'INSERT INTO access_logs (share_id, share_name, ip_address, user_agent, action) VALUES (?, ?, ?, ?, ?)'
+    ).run(
+      share.id,
+      share.name || null,
+      req.ip,
+      req.headers['user-agent'] || '',
+      action
+    );
     if (action === 'view') {
-      db.prepare('UPDATE shares SET view_count = view_count + 1 WHERE id = ?').run(shareId);
+      db.prepare('UPDATE shares SET view_count = view_count + 1 WHERE id = ?').run(share.id);
     }
   } catch (_) {}
 }
@@ -60,7 +67,7 @@ router.post('/verify/:id', async (req, res) => {
   const valid = await bcrypt.compare(password, share.password_hash);
   if (!valid) return res.status(401).json({ error: 'Incorrect password' });
 
-  logAccess(share.id, req, 'view');
+  logAccess(share, req, 'view');
 
   const sessionToken = makeToken(share.id);
   res.json({
@@ -127,9 +134,7 @@ router.post('/upload/:id', async (req, res) => {
   if (!share) return res.status(404).json({ error: 'Share not found' });
   if (!share.allow_upload) return res.status(403).json({ error: 'Uploads not allowed for this share' });
 
-  // Forward the upload to Immich
   const fetch = require('node-fetch');
-  const { getDb: db } = require('../db');
   const settingsDb = getDb();
   const urlRow = settingsDb.prepare("SELECT value FROM settings WHERE key = 'immich_url'").get();
   const keyRow = settingsDb.prepare("SELECT value FROM settings WHERE key = 'immich_api_key'").get();
@@ -140,7 +145,6 @@ router.post('/upload/:id', async (req, res) => {
     return res.status(502).json({ error: 'Immich not configured' });
   }
 
-  // Pipe the raw multipart body directly to Immich
   const contentType = req.headers['content-type'];
   try {
     const uploadRes = await fetch(`${immichUrl}/api/assets`, {
@@ -159,7 +163,6 @@ router.post('/upload/:id', async (req, res) => {
       return res.status(uploadRes.status).json({ error: uploadData.message || 'Upload failed' });
     }
 
-    // If share is an album, add asset to that album
     if (share.share_type === 'album' && uploadData.id) {
       await fetch(`${immichUrl}/api/albums/${share.immich_album_id}/assets`, {
         method: 'PUT',
@@ -168,7 +171,7 @@ router.post('/upload/:id', async (req, res) => {
       });
     }
 
-    logAccess(share.id, req, 'upload');
+    logAccess(share, req, 'upload');
 
     res.json({ success: true, assetId: uploadData.id });
   } catch (err) {

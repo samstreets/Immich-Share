@@ -83,34 +83,6 @@ Set `EXTERNAL_URL=https://share.yourdomain.com` in your `.env`.
 
 ---
 
-## GitHub Actions → Docker Hub Auto-Push
-
-### Setup
-
-1. Fork / push this repo to GitHub
-2. Go to **Settings → Secrets and variables → Actions** and add:
-   - `DOCKERHUB_USERNAME` — your Docker Hub username
-   - `DOCKERHUB_TOKEN` — a Docker Hub access token (Account Settings → Security → New Access Token)
-
-### What it does
-
-- Every push to `main` → builds and pushes `:latest` (multi-arch: `amd64` + `arm64`)
-- Git tags like `v1.2.3` → pushes `:1.2.3`, `:1.2`, `:1`
-- Pull requests → builds but does **not** push
-- Updates your Docker Hub repo description from this README
-
-> **Note on multi-arch:** The workflow builds each platform on a **native runner** (`ubuntu-latest` for amd64, `ubuntu-24.04-arm` for arm64) instead of QEMU emulation. This prevents timeout failures from `better-sqlite3` compiling native bindings under emulation. `ubuntu-24.04-arm` is free for public repos. For **private repos**, add a self-hosted arm64 runner or remove `linux/arm64` from the matrix.
-
-### Releasing a new version
-
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
-
----
-
-## Development
 
 ### Prerequisites
 - Node.js 20+

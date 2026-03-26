@@ -1,6 +1,112 @@
 import React, { useEffect, useState } from 'react'
 import { useApi } from '../hooks/useAuth.jsx'
 
+// ── small multi-URL editor ────────────────────────────────────────────────────
+function UrlListEditor({ value, onChange }) {
+  // value is a newline-separated string
+  const urls = value
+    ? value.split('\n').map(u => u.trim()).filter(Boolean)
+    : []
+
+  const [draft, setDraft] = useState('')
+  const [error, setError]  = useState('')
+
+  function validate(raw) {
+    const u = raw.trim()
+    if (!u) return null
+    if (u === '*') return u
+    try {
+      const parsed = new URL(u)
+      if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error()
+      return parsed.origin // normalise (strips trailing slash etc.)
+    } catch {
+      return null
+    }
+  }
+
+  function add() {
+    const cleaned = validate(draft)
+    if (!cleaned) {
+      setError('Enter a valid URL (e.g. https://share.example.com) or * to allow all.')
+      return
+    }
+    if (urls.includes(cleaned)) {
+      setError('That URL is already in the list.')
+      return
+    }
+    setError('')
+    setDraft('')
+    onChange([...urls, cleaned].join('\n'))
+  }
+
+  function remove(idx) {
+    const next = urls.filter((_, i) => i !== idx)
+    onChange(next.join('\n'))
+  }
+
+  function handleKeyDown(e) {
+    if (e.key === 'Enter') { e.preventDefault(); add() }
+  }
+
+  return (
+    <div>
+      {/* Existing URLs */}
+      {urls.length > 0 && (
+        <div style={{ marginBottom: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {urls.map((u, i) => (
+            <div key={i} style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              background: 'var(--bg3)', border: '1px solid var(--border)',
+              borderRadius: 'var(--radius-sm)', padding: '7px 12px',
+            }}>
+              <span style={{
+                flex: 1, fontFamily: 'monospace', fontSize: '0.82rem',
+                color: u === '*' ? 'var(--yellow)' : 'var(--accent)',
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>
+                {u === '*' ? '* — allow all origins' : u}
+              </span>
+              <button
+                type="button"
+                onClick={() => remove(i)}
+                style={{
+                  background: 'none', border: 'none', cursor: 'pointer',
+                  color: 'var(--text-dim)', fontSize: '1rem', padding: '0 2px', flexShrink: 0,
+                }}
+                title="Remove"
+              >✕</button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Add new */}
+      <div style={{ display: 'flex', gap: 8 }}>
+        <input
+          type="text"
+          value={draft}
+          onChange={e => { setDraft(e.target.value); setError('') }}
+          onKeyDown={handleKeyDown}
+          placeholder="https://share.yourdomain.com  or  *"
+          style={{ flex: 1 }}
+        />
+        <button
+          type="button"
+          className="btn btn-secondary"
+          onClick={add}
+          style={{ flexShrink: 0 }}
+        >
+          ＋ Add
+        </button>
+      </div>
+      {error && (
+        <div style={{ fontSize: '0.78rem', color: 'var(--red)', marginTop: 5 }}>{error}</div>
+      )}
+    </div>
+  )
+}
+
+// ── main settings page ────────────────────────────────────────────────────────
 export default function SettingsPage() {
   const api = useApi()
   const [settings, setSettings] = useState({
@@ -8,6 +114,7 @@ export default function SettingsPage() {
     immich_api_key: '',
     external_url: '',
     app_name: '',
+    allowed_origins: '',
   })
   const [apiKeyRaw, setApiKeyRaw] = useState('')
   const [showApiKey, setShowApiKey] = useState(false)
@@ -52,6 +159,7 @@ export default function SettingsPage() {
           immich_api_key: apiKeyRaw,
           external_url: settings.external_url,
           app_name: settings.app_name,
+          allowed_origins: settings.allowed_origins,
         },
       })
       setSettingsMsg({ type: 'success', text: 'Settings saved successfully.' })
@@ -66,7 +174,6 @@ export default function SettingsPage() {
     setTesting(true)
     setTestResult(null)
     try {
-      // Save first, then test
       await api('/admin/settings', {
         method: 'PUT',
         body: { immich_url: settings.immich_url, immich_api_key: apiKeyRaw },
@@ -114,6 +221,10 @@ export default function SettingsPage() {
     )
   }
 
+  const originsCount = settings.allowed_origins
+    ? settings.allowed_origins.split('\n').map(u => u.trim()).filter(Boolean).length
+    : 0
+
   return (
     <div style={{ maxWidth: 640 }}>
       <div style={{ marginBottom: 28 }}>
@@ -123,7 +234,7 @@ export default function SettingsPage() {
         </p>
       </div>
 
-      {/* Immich & App Settings */}
+      {/* ── Immich & App Settings ──────────────────────────────────────────── */}
       <div className="card" style={{ marginBottom: 20 }}>
         <h2 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: 20, paddingBottom: 12, borderBottom: '1px solid var(--border)' }}>
           Immich Connection
@@ -213,7 +324,60 @@ export default function SettingsPage() {
         </form>
       </div>
 
-      {/* Change Password */}
+      {/* ── Allowed Origins ───────────────────────────────────────────────── */}
+      <div className="card" style={{ marginBottom: 20 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20, paddingBottom: 12, borderBottom: '1px solid var(--border)' }}>
+          <h2 style={{ fontSize: '1rem', fontWeight: 600 }}>
+            Allowed Origins
+            {originsCount > 0 && (
+              <span style={{
+                marginLeft: 10,
+                padding: '2px 8px',
+                borderRadius: 99,
+                fontSize: '0.72rem',
+                background: 'var(--accent-glow)',
+                color: 'var(--accent)',
+                fontWeight: 500,
+              }}>
+                {originsCount} configured
+              </span>
+            )}
+          </h2>
+        </div>
+
+        <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginBottom: 14 }}>
+          Control which origins are permitted to make cross-origin requests to this app (CORS).
+          Leave empty to allow all origins. Add <code style={{ color: 'var(--yellow)', background: 'var(--bg3)', padding: '1px 5px', borderRadius: 3 }}>*</code> to explicitly allow all.
+        </p>
+
+        {originsCount === 0 && (
+          <div style={{
+            padding: '10px 14px', borderRadius: 'var(--radius-sm)',
+            background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.25)',
+            fontSize: '0.8rem', color: 'var(--yellow)', marginBottom: 14,
+          }}>
+            ⚠ No origins configured — all origins are currently allowed.
+          </div>
+        )}
+
+        <UrlListEditor
+          value={settings.allowed_origins}
+          onChange={val => setSettings(s => ({ ...s, allowed_origins: val }))}
+        />
+
+        <div style={{ marginTop: 14 }}>
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={saving}
+            onClick={saveSettings}
+          >
+            {saving ? <span className="loading-spinner" /> : 'Save Origins'}
+          </button>
+        </div>
+      </div>
+
+      {/* ── Change Password ───────────────────────────────────────────────── */}
       <div className="card">
         <h2 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: 20, paddingBottom: 12, borderBottom: '1px solid var(--border)' }}>
           Change Admin Password

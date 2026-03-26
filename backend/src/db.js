@@ -77,6 +77,7 @@ function initDb() {
     CREATE TABLE IF NOT EXISTS access_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       share_id TEXT NOT NULL,
+      share_name TEXT,
       ip_address TEXT,
       user_agent TEXT,
       action TEXT DEFAULT 'view',
@@ -85,10 +86,13 @@ function initDb() {
     )
   `);
 
-  // Migrate access_logs: add action column if missing
+  // Migrate access_logs: add columns if missing
   const logCols = db.prepare("PRAGMA table_info(access_logs)").all().map(c => c.name);
   if (!logCols.includes('action')) {
     db.exec(`ALTER TABLE access_logs ADD COLUMN action TEXT DEFAULT 'view'`);
+  }
+  if (!logCols.includes('share_name')) {
+    db.exec(`ALTER TABLE access_logs ADD COLUMN share_name TEXT`);
   }
 
   // Create default admin if none exists
@@ -107,6 +111,8 @@ function initDb() {
     immich_api_key: process.env.IMMICH_API_KEY || '',
     external_url: process.env.EXTERNAL_URL || `http://localhost:${process.env.PORT || 3000}`,
     app_name: 'Immich Share',
+    // Newline-separated list of allowed CORS origins (empty = allow all)
+    allowed_origins: process.env.ALLOWED_ORIGINS || '',
   };
 
   for (const [key, value] of Object.entries(defaults)) {
