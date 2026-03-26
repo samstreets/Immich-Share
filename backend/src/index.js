@@ -24,46 +24,32 @@ app.use(helmet({
   crossOriginEmbedderPolicy: false,
 }));
 
-// Dynamic CORS — reads allowed_origins from DB at request time
+// Dynamic CORS -- reads allowed_origins from DB at request time
 app.use(cors({
   origin: (origin, callback) => {
-    // Same-origin / non-browser requests have no origin header
     if (!origin) return callback(null, true);
-
     try {
       const db = getDb();
       const row = db.prepare("SELECT value FROM settings WHERE key = 'allowed_origins'").get();
       const raw = row?.value?.trim() || '';
-
-      // Empty = allow all
       if (!raw) return callback(null, true);
-
-      const allowed = raw
-        .split('\n')
-        .map(u => u.trim())
-        .filter(Boolean);
-
-      if (allowed.includes('*') || allowed.includes(origin)) {
-        return callback(null, true);
-      }
-      return callback(new Error(`CORS: origin ${origin} not allowed`));
+      const allowed = raw.split('\n').map(u => u.trim()).filter(Boolean);
+      if (allowed.includes('*') || allowed.includes(origin)) return callback(null, true);
+      return callback(new Error('CORS: origin ' + origin + ' not allowed'));
     } catch {
-      // On any DB error fall back to permissive
       return callback(null, true);
     }
   },
   credentials: true,
 }));
 
-// Rate limiting — generous limits, stricter on auth/verify
+// Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 500,
   standardHeaders: true,
   legacyHeaders: false,
-  handler: (req, res) => {
-    res.status(429).json({ error: 'Too many requests, please try again later.' });
-  },
+  handler: (req, res) => res.status(429).json({ error: 'Too many requests, please try again later.' }),
 });
 
 const authLimiter = rateLimit({
@@ -71,21 +57,26 @@ const authLimiter = rateLimit({
   max: 30,
   standardHeaders: true,
   legacyHeaders: false,
-  handler: (req, res) => {
-    res.status(429).json({ error: 'Too many login attempts, please try again later.' });
-  },
+  handler: (req, res) => res.status(429).json({ error: 'Too many login attempts, please try again later.' }),
 });
 
 app.use('/api/', limiter);
 app.use('/api/auth/', authLimiter);
 app.use('/api/public/verify', authLimiter);
 
-// JSON body parser — upload route is excluded so the request stream
-// flows directly to Immich without being buffered by Express first.
-app.use((req, res, next) => {
-  if (req.path.startsWith('/api/public/upload')) return next();
-  express.json({ limit: '10mb' })(req, res, next);
-});
+// Body parsing -- applied per-prefix so the upload route is NEVER buffered.
+// IMPORTANT: Do NOT add a global express.json() or express.raw() here.
+// The upload handler at /api/public/upload pipes req directly to Immich as
+// a raw stream. Any body parser applied to that path will buffer the entire
+// file in memory and throw PayloadTooLarge for large files.
+const jsonParser = express.json({ limit: '10mb' });
+app.use('/api/auth',           jsonParser);
+app.use('/api/shares',         jsonParser);
+app.use('/api/admin',          jsonParser);
+app.use('/api/public/verify',  jsonParser);
+app.use('/api/public/info',    jsonParser);
+app.use('/api/public/content', jsonParser);
+// /api/public/upload is intentionally omitted -- raw multipart stream
 
 // Init database
 initDb();
@@ -106,8 +97,8 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Immich Share running on port ${PORT}`);
-  console.log(`📦 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log('Immich Share running on port ' + PORT);
+  console.log('Environment: ' + (process.env.NODE_ENV || 'development'));
 });
 
 module.exports = app;
