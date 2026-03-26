@@ -42,14 +42,14 @@ function initDb() {
     )
   `);
 
-  // Shares table
+  // Shares table — share_type is 'album' or 'tag'
   db.exec(`
     CREATE TABLE IF NOT EXISTS shares (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       description TEXT,
       immich_album_id TEXT,
-      immich_asset_ids TEXT,
+      immich_tag_id TEXT,
       share_type TEXT NOT NULL DEFAULT 'album',
       password_hash TEXT NOT NULL,
       expires_at DATETIME,
@@ -61,6 +61,12 @@ function initDb() {
       is_active INTEGER DEFAULT 1
     )
   `);
+
+  // Migrate old schema: add immich_tag_id if missing, drop immich_asset_ids if present
+  const cols = db.prepare("PRAGMA table_info(shares)").all().map(c => c.name);
+  if (!cols.includes('immich_tag_id')) {
+    db.exec(`ALTER TABLE shares ADD COLUMN immich_tag_id TEXT`);
+  }
 
   // Share access logs
   db.exec(`

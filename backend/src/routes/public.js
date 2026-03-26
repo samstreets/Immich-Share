@@ -1,7 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const { getDb } = require('../db');
-const { getAlbum, getAssets } = require('../immich');
+const { getAlbum, getAssetsByTag } = require('../immich');
 const { makeToken, verifyToken } = require('../shareSession');
 
 const router = express.Router();
@@ -23,7 +23,7 @@ function getActiveShare(id) {
   return share;
 }
 
-// Public share info (no auth)
+// Public share info (no auth) — used by the password gate page
 router.get('/info/:id', (req, res) => {
   const db = getDb();
   const share = db.prepare(
@@ -42,7 +42,12 @@ router.get('/info/:id', (req, res) => {
   });
 });
 
-// Verify password -> returns a short-lived HMAC session token
+// Healthcheck (no auth)
+router.get('/info/healthcheck', (req, res) => {
+  res.json({ status: 'ok' });
+});
+
+// Verify password -> short-lived HMAC session token
 router.post('/verify/:id', async (req, res) => {
   const { password } = req.body;
   if (!password) return res.status(400).json({ error: 'Password required' });
@@ -84,9 +89,8 @@ router.post('/content/:id', async (req, res) => {
     if (share.share_type === 'album') {
       const album = await getAlbum(share.immich_album_id);
       assets = album.assets || [];
-    } else {
-      const ids = JSON.parse(share.immich_asset_ids || '[]');
-      assets = await getAssets(ids);
+    } else if (share.share_type === 'tag') {
+      assets = await getAssetsByTag(share.immich_tag_id);
     }
 
     const sanitized = assets.map(a => ({

@@ -1,7 +1,7 @@
 const express = require('express');
 const { getDb } = require('../db');
 const { requireAuth } = require('../middleware/auth');
-const { getAlbums, getAlbum, testConnection } = require('../immich');
+const { getAlbums, getAlbum, getTags, testConnection } = require('../immich');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -68,6 +68,16 @@ router.get('/immich/albums/:id', async (req, res) => {
   try {
     const album = await getAlbum(req.params.id);
     res.json(album);
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
+// List Immich tags
+router.get('/immich/tags', async (req, res) => {
+  try {
+    const tags = await getTags();
+    res.json(tags);
   } catch (err) {
     res.status(502).json({ error: err.message });
   }

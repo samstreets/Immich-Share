@@ -3,8 +3,21 @@ import { useApi } from '../hooks/useAuth.jsx'
 
 function CopyButton({ text }) {
   const [copied, setCopied] = useState(false)
-  function copy() {
-    navigator.clipboard.writeText(text)
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(text)
+    } catch {
+      // fallback for non-secure contexts
+      const ta = document.createElement('textarea')
+      ta.value = text
+      ta.style.position = 'fixed'
+      ta.style.opacity = '0'
+      document.body.appendChild(ta)
+      ta.focus()
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+    }
     setCopied(true)
     setTimeout(() => setCopied(false), 1800)
   }
@@ -18,12 +31,14 @@ function CopyButton({ text }) {
 function ShareModal({ onClose, onSaved, editShare }) {
   const api = useApi()
   const [albums, setAlbums] = useState([])
-  const [albumsLoading, setAlbumsLoading] = useState(false)
+  const [tags, setTags] = useState([])
+  const [sourceLoading, setSourceLoading] = useState(false)
   const [form, setForm] = useState({
     name: editShare?.name || '',
     description: editShare?.description || '',
     share_type: editShare?.share_type || 'album',
     immich_album_id: editShare?.immich_album_id || '',
+    immich_tag_id: editShare?.immich_tag_id || '',
     password: '',
     expires_at: editShare?.expires_at ? editShare.expires_at.slice(0, 16) : '',
     allow_download: editShare?.allow_download !== false,
@@ -33,11 +48,14 @@ function ShareModal({ onClose, onSaved, editShare }) {
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
-    setAlbumsLoading(true)
-    api('/admin/immich/albums')
-      .then(setAlbums)
-      .catch(() => setAlbums([]))
-      .finally(() => setAlbumsLoading(false))
+    setSourceLoading(true)
+    Promise.all([
+      api('/admin/immich/albums').catch(() => []),
+      api('/admin/immich/tags').catch(() => []),
+    ]).then(([a, t]) => {
+      setAlbums(Array.isArray(a) ? a : [])
+      setTags(Array.isArray(t) ? t : [])
+    }).finally(() => setSourceLoading(false))
   }, [])
 
   function set(key, val) {
@@ -70,6 +88,7 @@ function ShareModal({ onClose, onSaved, editShare }) {
             description: form.description,
             share_type: form.share_type,
             immich_album_id: form.share_type === 'album' ? form.immich_album_id : undefined,
+            immich_tag_id: form.share_type === 'tag' ? form.immich_tag_id : undefined,
             password: form.password,
             expires_at: form.expires_at || undefined,
             allow_download: form.allow_download,
@@ -97,37 +116,81 @@ function ShareModal({ onClose, onSaved, editShare }) {
           <form onSubmit={handleSubmit}>
             <div className="form-group">
               <label>Share Name *</label>
-              <input value={form.name} onChange={e => set('name', e.target.value)} placeholder="Summer 2024 Photos" required />
+              <input
+                value={form.name}
+                onChange={e => set('name', e.target.value)}
+                placeholder="Summer 2024 Photos"
+                required
+              />
             </div>
 
             <div className="form-group">
               <label>Description</label>
-              <input value={form.description} onChange={e => set('description', e.target.value)} placeholder="Optional description shown to viewers" />
+              <input
+                value={form.description}
+                onChange={e => set('description', e.target.value)}
+                placeholder="Optional description shown to viewers"
+              />
             </div>
 
             {!editShare && (
-              <div className="form-group">
-                <label>Share Type</label>
-                <select value={form.share_type} onChange={e => set('share_type', e.target.value)}>
-                  <option value="album">Immich Album</option>
-                  <option value="assets">Specific Assets</option>
-                </select>
-              </div>
-            )}
+              <>
+                <div className="form-group">
+                  <label>Share Type</label>
+                  <select value={form.share_type} onChange={e => set('share_type', e.target.value)}>
+                    <option value="album">Immich Album</option>
+                    <option value="tag">Immich Tag</option>
+                  </select>
+                </div>
 
-            {!editShare && form.share_type === 'album' && (
-              <div className="form-group">
-                <label>Album {albumsLoading && <span style={{ color: 'var(--text-dim)' }}>(loading…)</span>}</label>
-                <select value={form.immich_album_id} onChange={e => set('immich_album_id', e.target.value)} required>
-                  <option value="">Select an album…</option>
-                  {albums.map(a => (
-                    <option key={a.id} value={a.id}>{a.albumName} ({a.assetCount} assets)</option>
-                  ))}
-                </select>
-                {albums.length === 0 && !albumsLoading && (
-                  <span className="hint">No albums found — check your Immich connection in Settings.</span>
+                {form.share_type === 'album' && (
+                  <div className="form-group">
+                    <label>
+                      Album{' '}
+                      {sourceLoading && <span style={{ color: 'var(--text-dim)' }}>(loading…)</span>}
+                    </label>
+                    <select
+                      value={form.immich_album_id}
+                      onChange={e => set('immich_album_id', e.target.value)}
+                      required
+                    >
+                      <option value="">Select an album…</option>
+                      {albums.map(a => (
+                        <option key={a.id} value={a.id}>
+                          {a.albumName} ({a.assetCount} assets)
+                        </option>
+                      ))}
+                    </select>
+                    {albums.length === 0 && !sourceLoading && (
+                      <span className="hint">No albums found — check your Immich connection in Settings.</span>
+                    )}
+                  </div>
                 )}
-              </div>
+
+                {form.share_type === 'tag' && (
+                  <div className="form-group">
+                    <label>
+                      Tag{' '}
+                      {sourceLoading && <span style={{ color: 'var(--text-dim)' }}>(loading…)</span>}
+                    </label>
+                    <select
+                      value={form.immich_tag_id}
+                      onChange={e => set('immich_tag_id', e.target.value)}
+                      required
+                    >
+                      <option value="">Select a tag…</option>
+                      {tags.map(t => (
+                        <option key={t.id} value={t.id}>
+                          {t.value ?? t.name ?? t.id}
+                        </option>
+                      ))}
+                    </select>
+                    {tags.length === 0 && !sourceLoading && (
+                      <span className="hint">No tags found — check your Immich connection in Settings.</span>
+                    )}
+                  </div>
+                )}
+              </>
             )}
 
             <div className="form-group">
@@ -145,7 +208,11 @@ function ShareModal({ onClose, onSaved, editShare }) {
 
             <div className="form-group">
               <label>Expiry Date (optional)</label>
-              <input type="datetime-local" value={form.expires_at} onChange={e => set('expires_at', e.target.value)} />
+              <input
+                type="datetime-local"
+                value={form.expires_at}
+                onChange={e => set('expires_at', e.target.value)}
+              />
             </div>
 
             <div style={{ display: 'flex', gap: 20, marginBottom: 20 }}>
@@ -344,7 +411,6 @@ export default function SharesPage() {
         </div>
       )}
 
-      {/* Create/Edit modal */}
       {showModal && (
         <ShareModal
           editShare={editShare}
@@ -353,7 +419,6 @@ export default function SharesPage() {
         />
       )}
 
-      {/* Delete confirm */}
       {confirmDelete && (
         <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setConfirmDelete(null)}>
           <div className="modal" style={{ maxWidth: 400 }}>

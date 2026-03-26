@@ -42,13 +42,25 @@ async function getAlbum(albumId) {
   return immichRequest(`/albums/${albumId}`);
 }
 
-async function getAsset(assetId) {
-  return immichRequest(`/assets/${assetId}`);
+// Tags — Immich exposes tags under /tags
+async function getTags() {
+  return immichRequest('/tags');
 }
 
-async function getAssets(assetIds) {
-  const results = await Promise.all(assetIds.map(id => getAsset(id).catch(() => null)));
-  return results.filter(Boolean);
+// Assets for a tag via search
+async function getAssetsByTag(tagId) {
+  // Immich search endpoint with tag filter
+  const body = { tagIds: [tagId], size: 1000, page: 1 };
+  const result = await immichRequest('/search/metadata', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+  // Result shape: { assets: { items: [...] } }
+  return result?.assets?.items || [];
+}
+
+async function getAsset(assetId) {
+  return immichRequest(`/assets/${assetId}`);
 }
 
 async function proxyAssetThumbnail(assetId, size = 'thumbnail') {
@@ -84,7 +96,6 @@ async function proxyAssetVideo(assetId, rangeHeader) {
 
   const response = await fetch(`${url}/api/assets/${assetId}/video/playback`, { headers });
 
-  // 206 Partial Content is fine — don't treat as error
   if (!response.ok && response.status !== 206) {
     throw new Error(`Failed to fetch video: ${response.status}`);
   }
@@ -103,8 +114,9 @@ async function testConnection() {
 module.exports = {
   getAlbums,
   getAlbum,
+  getTags,
+  getAssetsByTag,
   getAsset,
-  getAssets,
   proxyAssetThumbnail,
   proxyAssetOriginal,
   proxyAssetVideo,
