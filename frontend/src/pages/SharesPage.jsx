@@ -7,7 +7,6 @@ function CopyButton({ text }) {
     try {
       await navigator.clipboard.writeText(text)
     } catch {
-      // fallback for non-secure contexts
       const ta = document.createElement('textarea')
       ta.value = text
       ta.style.position = 'fixed'
@@ -28,6 +27,94 @@ function CopyButton({ text }) {
   )
 }
 
+// ── Access Logs Modal ─────────────────────────────────────────────────────────
+function LogsModal({ share, onClose }) {
+  const api = useApi()
+  const [logs, setLogs] = useState([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    api(`/shares/${share.id}/logs`)
+      .then(setLogs)
+      .catch(console.error)
+      .finally(() => setLoading(false))
+  }, [share.id])
+
+  const actionColors = {
+    view: 'var(--accent)',
+    upload: 'var(--green)',
+  }
+
+  return (
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal" style={{ maxWidth: 680 }}>
+        <div className="modal-header">
+          <h2>Access Logs — {share.name}</h2>
+          <button className="close-btn" onClick={onClose}>✕</button>
+        </div>
+        <div className="modal-body">
+          {loading ? (
+            <div style={{ display: 'flex', justifyContent: 'center', padding: '40px 0' }}>
+              <span className="loading-spinner" style={{ width: 24, height: 24 }} />
+            </div>
+          ) : logs.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
+              No access logs yet
+            </div>
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                    {['Time', 'Action', 'IP Address', 'User Agent'].map(h => (
+                      <th key={h} style={{
+                        padding: '8px 12px', textAlign: 'left',
+                        color: 'var(--text-dim)', fontWeight: 500, whiteSpace: 'nowrap',
+                      }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {logs.map(log => (
+                    <tr key={log.id} style={{ borderBottom: '1px solid var(--border)' }}>
+                      <td style={{ padding: '8px 12px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                        {new Date(log.accessed_at).toLocaleString(undefined, {
+                          dateStyle: 'short', timeStyle: 'short'
+                        })}
+                      </td>
+                      <td style={{ padding: '8px 12px' }}>
+                        <span style={{
+                          display: 'inline-flex', alignItems: 'center', gap: 4,
+                          padding: '2px 8px', borderRadius: 99, fontSize: '0.75rem',
+                          background: `${actionColors[log.action] || 'var(--text-dim)'}18`,
+                          color: actionColors[log.action] || 'var(--text-dim)',
+                          fontWeight: 500,
+                        }}>
+                          {log.action === 'view' ? '👁' : log.action === 'upload' ? '📤' : '·'} {log.action}
+                        </span>
+                      </td>
+                      <td style={{ padding: '8px 12px', color: 'var(--text-muted)', fontFamily: 'var(--mono, monospace)', fontSize: '0.78rem' }}>
+                        {log.ip_address || '—'}
+                      </td>
+                      <td style={{ padding: '8px 12px', color: 'var(--text-dim)', maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {log.user_agent || '—'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div style={{ marginTop: 12, fontSize: '0.78rem', color: 'var(--text-dim)' }}>
+                Showing last {logs.length} entries
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Share Create/Edit Modal ───────────────────────────────────────────────────
 function ShareModal({ onClose, onSaved, editShare }) {
   const api = useApi()
   const [albums, setAlbums] = useState([])
@@ -42,6 +129,7 @@ function ShareModal({ onClose, onSaved, editShare }) {
     password: '',
     expires_at: editShare?.expires_at ? editShare.expires_at.slice(0, 16) : '',
     allow_download: editShare?.allow_download !== false,
+    allow_upload: editShare?.allow_upload || false,
     show_metadata: editShare?.show_metadata || false,
   })
   const [error, setError] = useState('')
@@ -76,6 +164,7 @@ function ShareModal({ onClose, onSaved, editShare }) {
             password: form.password || undefined,
             expires_at: form.expires_at || null,
             allow_download: form.allow_download,
+            allow_upload: form.allow_upload,
             show_metadata: form.show_metadata,
           },
         })
@@ -92,6 +181,7 @@ function ShareModal({ onClose, onSaved, editShare }) {
             password: form.password,
             expires_at: form.expires_at || undefined,
             allow_download: form.allow_download,
+            allow_upload: form.allow_upload,
             show_metadata: form.show_metadata,
           },
         })
@@ -215,7 +305,7 @@ function ShareModal({ onClose, onSaved, editShare }) {
               />
             </div>
 
-            <div style={{ display: 'flex', gap: 20, marginBottom: 20 }}>
+            <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', marginBottom: 20 }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: '0.875rem' }}>
                 <input
                   type="checkbox"
@@ -224,6 +314,15 @@ function ShareModal({ onClose, onSaved, editShare }) {
                   style={{ width: 'auto' }}
                 />
                 Allow downloads
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: '0.875rem' }}>
+                <input
+                  type="checkbox"
+                  checked={form.allow_upload}
+                  onChange={e => set('allow_upload', e.target.checked)}
+                  style={{ width: 'auto' }}
+                />
+                Allow uploads
               </label>
               <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: '0.875rem' }}>
                 <input
@@ -249,6 +348,7 @@ function ShareModal({ onClose, onSaved, editShare }) {
   )
 }
 
+// ── Main Page ─────────────────────────────────────────────────────────────────
 export default function SharesPage() {
   const api = useApi()
   const [shares, setShares] = useState([])
@@ -256,6 +356,7 @@ export default function SharesPage() {
   const [showModal, setShowModal] = useState(false)
   const [editShare, setEditShare] = useState(null)
   const [confirmDelete, setConfirmDelete] = useState(null)
+  const [logsShare, setLogsShare] = useState(null)
 
   const load = useCallback(async () => {
     try {
@@ -342,6 +443,7 @@ export default function SharesPage() {
                     {share.isExpired && share.is_active && <span className="badge badge-red">Expired</span>}
                     {share.is_active && !share.isExpired && <span className="badge badge-green">Active</span>}
                     <span className="badge badge-purple">{share.share_type}</span>
+                    {share.allow_upload === 1 && <span className="badge badge-purple">📤 uploads</span>}
                   </div>
                   {share.description && (
                     <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: 6 }}>
@@ -384,7 +486,14 @@ export default function SharesPage() {
                 </div>
 
                 {/* Actions */}
-                <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+                <div style={{ display: 'flex', gap: 8, flexShrink: 0, flexWrap: 'wrap' }}>
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => setLogsShare(share)}
+                    title="View access logs"
+                  >
+                    📋 Logs
+                  </button>
                   <button
                     className="btn btn-secondary btn-sm"
                     onClick={() => toggleActive(share)}
@@ -417,6 +526,10 @@ export default function SharesPage() {
           onClose={() => setShowModal(false)}
           onSaved={() => { setShowModal(false); load() }}
         />
+      )}
+
+      {logsShare && (
+        <LogsModal share={logsShare} onClose={() => setLogsShare(null)} />
       )}
 
       {confirmDelete && (

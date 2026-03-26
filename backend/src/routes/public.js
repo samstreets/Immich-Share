@@ -6,12 +6,14 @@ const { makeToken, verifyToken } = require('../shareSession');
 
 const router = express.Router();
 
-function logAccess(shareId, req) {
+function logAccess(shareId, req, action = 'view') {
   try {
     const db = getDb();
-    db.prepare('INSERT INTO access_logs (share_id, ip_address, user_agent) VALUES (?, ?, ?)')
-      .run(shareId, req.ip, req.headers['user-agent'] || '');
-    db.prepare('UPDATE shares SET view_count = view_count + 1 WHERE id = ?').run(shareId);
+    db.prepare('INSERT INTO access_logs (share_id, ip_address, user_agent, action) VALUES (?, ?, ?, ?)')
+      .run(shareId, req.ip, req.headers['user-agent'] || '', action);
+    if (action === 'view') {
+      db.prepare('UPDATE shares SET view_count = view_count + 1 WHERE id = ?').run(shareId);
+    }
   } catch (_) {}
 }
 
@@ -58,7 +60,7 @@ router.post('/verify/:id', async (req, res) => {
   const valid = await bcrypt.compare(password, share.password_hash);
   if (!valid) return res.status(401).json({ error: 'Incorrect password' });
 
-  logAccess(share.id, req);
+  logAccess(share.id, req, 'view');
 
   const sessionToken = makeToken(share.id);
   res.json({
@@ -67,6 +69,7 @@ router.post('/verify/:id', async (req, res) => {
     description: share.description,
     share_type: share.share_type,
     allow_download: share.allow_download === 1,
+    allow_upload: share.allow_upload === 1,
     show_metadata: share.show_metadata === 1,
     sessionToken,
     verified: true,
@@ -109,6 +112,67 @@ router.post('/content/:id', async (req, res) => {
     res.json({ assets: sanitized, total: sanitized.length });
   } catch (err) {
     res.status(502).json({ error: `Failed to fetch content: ${err.message}` });
+  }
+});
+
+// Upload assets to share (requires session token + allow_upload)
+router.post('/upload/:id', async (req, res) => {
+  const { sessionToken } = req.body;
+  if (!sessionToken) return res.status(400).json({ error: 'Session token required' });
+  if (!verifyToken(req.params.id, sessionToken)) {
+    return res.status(401).json({ error: 'Invalid or expired session.' });
+  }
+
+  const share = getActiveShare(req.params.id);
+  if (!share) return res.status(404).json({ error: 'Share not found' });
+  if (!share.allow_upload) return res.status(403).json({ error: 'Uploads not allowed for this share' });
+
+  // Forward the upload to Immich
+  const fetch = require('node-fetch');
+  const { getDb: db } = require('../db');
+  const settingsDb = getDb();
+  const urlRow = settingsDb.prepare("SELECT value FROM settings WHERE key = 'immich_url'").get();
+  const keyRow = settingsDb.prepare("SELECT value FROM settings WHERE key = 'immich_api_key'").get();
+  const immichUrl = urlRow?.value?.replace(/\/$/, '') || '';
+  const apiKey = keyRow?.value || '';
+
+  if (!immichUrl || !apiKey) {
+    return res.status(502).json({ error: 'Immich not configured' });
+  }
+
+  // Pipe the raw multipart body directly to Immich
+  const contentType = req.headers['content-type'];
+  try {
+    const uploadRes = await fetch(`${immichUrl}/api/assets`, {
+      method: 'POST',
+      headers: {
+        'x-api-key': apiKey,
+        'Content-Type': contentType,
+        'x-immich-checksum': req.headers['x-immich-checksum'] || '',
+      },
+      body: req,
+    });
+
+    const uploadData = await uploadRes.json();
+
+    if (!uploadRes.ok) {
+      return res.status(uploadRes.status).json({ error: uploadData.message || 'Upload failed' });
+    }
+
+    // If share is an album, add asset to that album
+    if (share.share_type === 'album' && uploadData.id) {
+      await fetch(`${immichUrl}/api/albums/${share.immich_album_id}/assets`, {
+        method: 'PUT',
+        headers: { 'x-api-key': apiKey, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: [uploadData.id] }),
+      });
+    }
+
+    logAccess(share.id, req, 'upload');
+
+    res.json({ success: true, assetId: uploadData.id });
+  } catch (err) {
+    res.status(502).json({ error: `Upload failed: ${err.message}` });
   }
 });
 

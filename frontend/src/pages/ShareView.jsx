@@ -1,6 +1,19 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { useParams } from 'react-router-dom'
 
+// Safe JSON fetch — never throws on non-JSON bodies
+async function safeFetch(url, options = {}) {
+  const res = await fetch(url, options)
+  const text = await res.text()
+  let data
+  try {
+    data = JSON.parse(text)
+  } catch {
+    data = { error: text || `HTTP ${res.status}` }
+  }
+  return { ok: res.ok, status: res.status, data }
+}
+
 // ── Password gate ─────────────────────────────────────────────────────────────
 function PasswordGate({ shareInfo, onUnlock }) {
   const [password, setPassword] = useState('')
@@ -12,13 +25,12 @@ function PasswordGate({ shareInfo, onUnlock }) {
     setError('')
     setLoading(true)
     try {
-      const res = await fetch(`/api/public/verify/${shareInfo.id}`, {
+      const { ok, data } = await safeFetch(`/api/public/verify/${shareInfo.id}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password }),
       })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error)
+      if (!ok) throw new Error(data.error || 'Verification failed')
       onUnlock(data)
     } catch (err) {
       setError(err.message)
@@ -78,6 +90,185 @@ function PasswordGate({ shareInfo, onUnlock }) {
           </form>
         </div>
       </div>
+    </div>
+  )
+}
+
+// ── Upload Panel ──────────────────────────────────────────────────────────────
+function UploadPanel({ shareId, sessionToken, onUploaded }) {
+  const [files, setFiles] = useState([])
+  const [uploading, setUploading] = useState(false)
+  const [results, setResults] = useState([]) // {name, ok, error}
+  const [dragOver, setDragOver] = useState(false)
+  const inputRef = useRef()
+
+  function addFiles(incoming) {
+    const arr = Array.from(incoming).filter(f =>
+      f.type.startsWith('image/') || f.type.startsWith('video/')
+    )
+    setFiles(prev => {
+      const existing = new Set(prev.map(f => f.name + f.size))
+      return [...prev, ...arr.filter(f => !existing.has(f.name + f.size))]
+    })
+    setResults([])
+  }
+
+  function removeFile(idx) {
+    setFiles(prev => prev.filter((_, i) => i !== idx))
+  }
+
+  async function uploadAll() {
+    if (!files.length) return
+    setUploading(true)
+    setResults([])
+    const out = []
+
+    for (const file of files) {
+      try {
+        const formData = new FormData()
+        formData.append('assetData', file, file.name)
+        formData.append('deviceAssetId', `${file.name}-${file.size}-${file.lastModified}`)
+        formData.append('deviceId', 'immich-share-upload')
+        formData.append('fileCreatedAt', new Date(file.lastModified).toISOString())
+        formData.append('fileModifiedAt', new Date(file.lastModified).toISOString())
+        formData.append('sessionToken', sessionToken)
+
+        const res = await fetch(`/api/public/upload/${shareId}`, {
+          method: 'POST',
+          body: formData,
+        })
+        const text = await res.text()
+        let data
+        try { data = JSON.parse(text) } catch { data = { error: text } }
+
+        if (res.ok && data.success) {
+          out.push({ name: file.name, ok: true })
+        } else {
+          out.push({ name: file.name, ok: false, error: data.error || 'Upload failed' })
+        }
+      } catch (err) {
+        out.push({ name: file.name, ok: false, error: err.message })
+      }
+    }
+
+    setResults(out)
+    setUploading(false)
+    const anyOk = out.some(r => r.ok)
+    if (anyOk) {
+      setFiles([])
+      setTimeout(onUploaded, 800)
+    }
+  }
+
+  const successCount = results.filter(r => r.ok).length
+  const failCount = results.filter(r => !r.ok).length
+
+  return (
+    <div style={{
+      background: 'var(--bg2)',
+      border: '1px solid var(--border)',
+      borderRadius: 'var(--radius)',
+      padding: 20,
+      marginBottom: 20,
+    }}>
+      <h3 style={{ fontSize: '0.95rem', fontWeight: 600, marginBottom: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span>📤</span> Upload Photos & Videos
+      </h3>
+
+      {/* Drop zone */}
+      <div
+        onDragOver={e => { e.preventDefault(); setDragOver(true) }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={e => { e.preventDefault(); setDragOver(false); addFiles(e.dataTransfer.files) }}
+        onClick={() => inputRef.current?.click()}
+        style={{
+          border: `2px dashed ${dragOver ? 'var(--accent)' : 'var(--border)'}`,
+          borderRadius: 'var(--radius-sm)',
+          padding: '24px 16px',
+          textAlign: 'center',
+          cursor: 'pointer',
+          background: dragOver ? 'var(--accent-glow)' : 'var(--bg3)',
+          transition: 'all 0.15s',
+          marginBottom: 12,
+        }}
+      >
+        <div style={{ fontSize: '1.8rem', marginBottom: 8 }}>🖼️</div>
+        <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>
+          Drop images/videos here or <span style={{ color: 'var(--accent)' }}>browse</span>
+        </div>
+        <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginTop: 4 }}>
+          JPG, PNG, HEIC, MP4, MOV and more
+        </div>
+        <input
+          ref={inputRef}
+          type="file"
+          multiple
+          accept="image/*,video/*"
+          style={{ display: 'none' }}
+          onChange={e => addFiles(e.target.files)}
+        />
+      </div>
+
+      {/* File queue */}
+      {files.length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: '0.8rem', color: 'var(--text-dim)', marginBottom: 6 }}>
+            {files.length} file{files.length !== 1 ? 's' : ''} queued
+          </div>
+          <div style={{ maxHeight: 140, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {files.map((f, i) => (
+              <div key={i} style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                padding: '5px 10px',
+                background: 'var(--bg)',
+                borderRadius: 'var(--radius-sm)',
+                fontSize: '0.8rem',
+              }}>
+                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {f.type.startsWith('video/') ? '🎬 ' : '🖼 '}{f.name}
+                </span>
+                <span style={{ color: 'var(--text-dim)', flexShrink: 0 }}>
+                  {(f.size / 1024 / 1024).toFixed(1)}MB
+                </span>
+                <button
+                  onClick={e => { e.stopPropagation(); removeFile(i) }}
+                  style={{ background: 'none', color: 'var(--text-dim)', fontSize: '1rem', padding: '0 2px', border: 'none', cursor: 'pointer' }}
+                >✕</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Results */}
+      {results.length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          {successCount > 0 && (
+            <div className="success-msg" style={{ marginBottom: 6 }}>
+              ✓ {successCount} file{successCount !== 1 ? 's' : ''} uploaded successfully
+            </div>
+          )}
+          {failCount > 0 && (
+            <div className="error-msg">
+              {results.filter(r => !r.ok).map((r, i) => (
+                <div key={i}>✗ {r.name}: {r.error}</div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      <button
+        className="btn btn-primary"
+        onClick={uploadAll}
+        disabled={uploading || files.length === 0}
+      >
+        {uploading ? (
+          <><span className="loading-spinner" /> Uploading…</>
+        ) : (
+          `Upload ${files.length > 0 ? files.length + ' file' + (files.length !== 1 ? 's' : '') : ''}`
+        )}
+      </button>
     </div>
   )
 }
@@ -207,44 +398,50 @@ export default function ShareView() {
   const [shareInfo, setShareInfo] = useState(null)
   const [infoLoading, setInfoLoading] = useState(true)
   const [infoError, setInfoError] = useState('')
-  const [shareData, setShareData] = useState(null)   // from /verify
+  const [shareData, setShareData] = useState(null)
   const [assets, setAssets] = useState([])
   const [assetsLoading, setAssetsLoading] = useState(false)
   const [assetsError, setAssetsError] = useState('')
-  const [lightbox, setLightbox] = useState(null)      // index
+  const [lightbox, setLightbox] = useState(null)
+  const [showUpload, setShowUpload] = useState(false)
 
   // Load public share info
   useEffect(() => {
-    fetch(`/api/public/info/${shareId}`)
-      .then(r => r.json())
-      .then(data => {
-        if (data.error) throw new Error(data.error)
+    safeFetch(`/api/public/info/${shareId}`)
+      .then(({ ok, data }) => {
+        if (!ok || data.error) throw new Error(data.error || 'Share not found')
         setShareInfo(data)
       })
       .catch(e => setInfoError(e.message))
       .finally(() => setInfoLoading(false))
   }, [shareId])
 
-  // Called after successful password entry — shareData includes sessionToken
-  const handleUnlock = useCallback(async (data) => {
-    setShareData(data)
+  const loadAssets = useCallback(async (sessionToken) => {
     setAssetsLoading(true)
     setAssetsError('')
     try {
-      const res = await fetch(`/api/public/content/${shareId}`, {
+      const { ok, data } = await safeFetch(`/api/public/content/${shareId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionToken: data.sessionToken }),
+        body: JSON.stringify({ sessionToken }),
       })
-      const body = await res.json()
-      if (!res.ok) throw new Error(body.error)
-      setAssets(body.assets)
+      if (!ok) throw new Error(data.error || 'Failed to load content')
+      setAssets(data.assets)
     } catch (err) {
       setAssetsError(err.message)
     } finally {
       setAssetsLoading(false)
     }
   }, [shareId])
+
+  const handleUnlock = useCallback(async (data) => {
+    setShareData(data)
+    await loadAssets(data.sessionToken)
+  }, [loadAssets])
+
+  const handleUploaded = useCallback(() => {
+    if (shareData?.sessionToken) loadAssets(shareData.sessionToken)
+  }, [shareData, loadAssets])
 
   const token = shareData?.sessionToken || ''
   const t = encodeURIComponent(token)
@@ -309,8 +506,28 @@ export default function ShareView() {
           {shareData.allow_download && assets.length > 0 && (
             <span className="badge badge-green">⬇ Downloads on</span>
           )}
+          {shareData.allow_upload && (
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => setShowUpload(v => !v)}
+              style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+            >
+              📤 {showUpload ? 'Hide Upload' : 'Upload'}
+            </button>
+          )}
         </div>
       </div>
+
+      {/* Upload panel */}
+      {shareData.allow_upload && showUpload && (
+        <div style={{ maxWidth: 640, margin: '20px auto 0', padding: '0 16px' }}>
+          <UploadPanel
+            shareId={shareId}
+            sessionToken={token}
+            onUploaded={handleUploaded}
+          />
+        </div>
+      )}
 
       {/* Gallery */}
       {assetsLoading ? (
@@ -323,7 +540,9 @@ export default function ShareView() {
         </div>
       ) : assets.length === 0 ? (
         <div style={{ textAlign: 'center', padding: '80px 20px', color: 'var(--text-muted)' }}>
-          No photos found in this share.
+          {shareData.allow_upload
+            ? 'No photos yet — be the first to upload!'
+            : 'No photos found in this share.'}
         </div>
       ) : (
         <div style={{

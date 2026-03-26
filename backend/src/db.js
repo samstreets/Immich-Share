@@ -42,7 +42,7 @@ function initDb() {
     )
   `);
 
-  // Shares table — share_type is 'album' or 'tag'
+  // Shares table
   db.exec(`
     CREATE TABLE IF NOT EXISTS shares (
       id TEXT PRIMARY KEY,
@@ -54,6 +54,7 @@ function initDb() {
       password_hash TEXT NOT NULL,
       expires_at DATETIME,
       allow_download INTEGER DEFAULT 1,
+      allow_upload INTEGER DEFAULT 0,
       show_metadata INTEGER DEFAULT 0,
       view_count INTEGER DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -62,23 +63,33 @@ function initDb() {
     )
   `);
 
-  // Migrate old schema: add immich_tag_id if missing, drop immich_asset_ids if present
+  // Migrate old schemas
   const cols = db.prepare("PRAGMA table_info(shares)").all().map(c => c.name);
   if (!cols.includes('immich_tag_id')) {
     db.exec(`ALTER TABLE shares ADD COLUMN immich_tag_id TEXT`);
   }
+  if (!cols.includes('allow_upload')) {
+    db.exec(`ALTER TABLE shares ADD COLUMN allow_upload INTEGER DEFAULT 0`);
+  }
 
-  // Share access logs
+  // Share access logs — with action column
   db.exec(`
     CREATE TABLE IF NOT EXISTS access_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       share_id TEXT NOT NULL,
       ip_address TEXT,
       user_agent TEXT,
+      action TEXT DEFAULT 'view',
       accessed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (share_id) REFERENCES shares(id)
     )
   `);
+
+  // Migrate access_logs: add action column if missing
+  const logCols = db.prepare("PRAGMA table_info(access_logs)").all().map(c => c.name);
+  if (!logCols.includes('action')) {
+    db.exec(`ALTER TABLE access_logs ADD COLUMN action TEXT DEFAULT 'view'`);
+  }
 
   // Create default admin if none exists
   const adminCount = db.prepare('SELECT COUNT(*) as count FROM admin_users').get();

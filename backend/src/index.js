@@ -20,7 +20,7 @@ app.set('trust proxy', 1);
 
 // Security middleware
 app.use(helmet({
-  contentSecurityPolicy: false, // Disabled to allow inline scripts in frontend
+  contentSecurityPolicy: false,
   crossOriginEmbedderPolicy: false,
 }));
 
@@ -29,25 +29,36 @@ app.use(cors({
   credentials: true,
 }));
 
-// Rate limiting
+// Rate limiting — generous limits, stricter on auth/verify
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 100,
+  max: 500,
   standardHeaders: true,
   legacyHeaders: false,
+  // Always return JSON even for rate limit responses
+  handler: (req, res) => {
+    res.status(429).json({ error: 'Too many requests, please try again later.' });
+  },
 });
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 20,
+  max: 30,
   standardHeaders: true,
   legacyHeaders: false,
+  handler: (req, res) => {
+    res.status(429).json({ error: 'Too many login attempts, please try again later.' });
+  },
 });
 
 app.use('/api/', limiter);
 app.use('/api/auth/', authLimiter);
 app.use('/api/public/verify', authLimiter);
 
+// Raw body passthrough for upload endpoint (multipart handled by node-fetch pipe)
+app.use('/api/public/upload', express.raw({ type: '*/*', limit: '500mb' }));
+
+// JSON body for everything else
 app.use(express.json({ limit: '10mb' }));
 
 // Init database

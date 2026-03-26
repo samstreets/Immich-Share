@@ -19,7 +19,7 @@ router.get('/', (req, res) => {
   const db = getDb();
   const shares = db.prepare(`
     SELECT id, name, description, share_type, immich_album_id, immich_tag_id,
-           expires_at, allow_download, show_metadata, view_count,
+           expires_at, allow_download, allow_upload, show_metadata, view_count,
            created_at, updated_at, is_active
     FROM shares ORDER BY created_at DESC
   `).all();
@@ -61,6 +61,7 @@ router.post('/', async (req, res) => {
     password,
     expires_at,
     allow_download,
+    allow_upload,
     show_metadata,
   } = req.body;
 
@@ -83,8 +84,8 @@ router.post('/', async (req, res) => {
 
   db.prepare(`
     INSERT INTO shares (id, name, description, share_type, immich_album_id, immich_tag_id,
-      password_hash, expires_at, allow_download, show_metadata)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      password_hash, expires_at, allow_download, allow_upload, show_metadata)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id, name, description || null, share_type,
     immich_album_id || null,
@@ -92,6 +93,7 @@ router.post('/', async (req, res) => {
     passwordHash,
     expires_at || null,
     allow_download !== false ? 1 : 0,
+    allow_upload ? 1 : 0,
     show_metadata ? 1 : 0
   );
 
@@ -105,7 +107,7 @@ router.patch('/:id', async (req, res) => {
   const share = db.prepare('SELECT * FROM shares WHERE id = ?').get(req.params.id);
   if (!share) return res.status(404).json({ error: 'Share not found' });
 
-  const { name, description, password, expires_at, allow_download, show_metadata, is_active } = req.body;
+  const { name, description, password, expires_at, allow_download, allow_upload, show_metadata, is_active } = req.body;
 
   let passwordHash = share.password_hash;
   if (password) {
@@ -116,6 +118,7 @@ router.patch('/:id', async (req, res) => {
   const updatedDescription = description !== undefined ? description : share.description;
   const updatedExpiresAt   = expires_at !== undefined ? (expires_at || null) : share.expires_at;
   const updatedDownload    = allow_download !== undefined ? (allow_download ? 1 : 0) : share.allow_download;
+  const updatedUpload      = allow_upload !== undefined ? (allow_upload ? 1 : 0) : share.allow_upload;
   const updatedMetadata    = show_metadata !== undefined ? (show_metadata ? 1 : 0) : share.show_metadata;
   const updatedActive      = is_active !== undefined ? (is_active ? 1 : 0) : share.is_active;
 
@@ -126,13 +129,14 @@ router.patch('/:id', async (req, res) => {
       password_hash = ?,
       expires_at = ?,
       allow_download = ?,
+      allow_upload = ?,
       show_metadata = ?,
       is_active = ?,
       updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
   `).run(
     updatedName, updatedDescription, passwordHash,
-    updatedExpiresAt, updatedDownload, updatedMetadata, updatedActive,
+    updatedExpiresAt, updatedDownload, updatedUpload, updatedMetadata, updatedActive,
     req.params.id
   );
 
@@ -151,7 +155,7 @@ router.delete('/:id', (req, res) => {
 router.get('/:id/logs', (req, res) => {
   const db = getDb();
   const logs = db.prepare(`
-    SELECT * FROM access_logs WHERE share_id = ? ORDER BY accessed_at DESC LIMIT 100
+    SELECT * FROM access_logs WHERE share_id = ? ORDER BY accessed_at DESC LIMIT 200
   `).all(req.params.id);
   res.json(logs);
 });
