@@ -1,29 +1,29 @@
 services:
   immich-share:
-    image: ${DOCKER_IMAGE:-immich-share:latest}
+    image: samuelstreets/immich-share:latest
     # Or build locally:
     # build: .
     container_name: immich-share
     restart: unless-stopped
     ports:
-      - "${PORT:-3000}:3000"
+      - 3000:3000
     volumes:
       - immich-share-data:/app/data
     environment:
       # ── Required ─────────────────────────────────────────────────────────
       NODE_ENV: production
       # URL of your Immich server (can also be set in Admin → Settings)
-      IMMICH_URL: ${IMMICH_URL:-}
+      IMMICH_URL:
       # Immich API key (can also be set in Admin → Settings)
-      IMMICH_API_KEY: ${IMMICH_API_KEY:-}
+      IMMICH_API_KEY:
 
       # ── Recommended ───────────────────────────────────────────────────────
       # Public-facing URL of THIS app — used to build share links
-      EXTERNAL_URL: ${EXTERNAL_URL:-http://localhost:3000}
+      EXTERNAL_URL: http://localhost:3000
       # Change this! Used to sign admin JWT tokens
-      JWT_SECRET: ${JWT_SECRET:-change-me-to-a-long-random-string}
+      JWT_SECRET: change-me-to-a-long-random-string
       # Default admin password (only used on first run)
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
+      ADMIN_PASSWORD: admin
 
       # ── Optional ──────────────────────────────────────────────────────────
       PORT: 3000
