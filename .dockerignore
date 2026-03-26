@@ -1,0 +1,12 @@
+**/.git
+**/.gitignore
+**/node_modules
+**/npm-debug.log
+**/.env
+**/.env.*
+!**/.env.example
+**/data
+frontend/dist
+.github
+*.md
+docker-compose*.yml
