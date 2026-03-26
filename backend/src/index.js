@@ -80,11 +80,12 @@ app.use('/api/', limiter);
 app.use('/api/auth/', authLimiter);
 app.use('/api/public/verify', authLimiter);
 
-// Raw body passthrough for upload endpoint
-app.use('/api/public/upload', express.raw({ type: '*/*', limit: '500mb' }));
-
-// JSON body for everything else
-app.use(express.json({ limit: '10mb' }));
+// JSON body parser — upload route is excluded so the request stream
+// flows directly to Immich without being buffered by Express first.
+app.use((req, res, next) => {
+  if (req.path.startsWith('/api/public/upload')) return next();
+  express.json({ limit: '10mb' })(req, res, next);
+});
 
 // Init database
 initDb();

@@ -98,7 +98,7 @@ function PasswordGate({ shareInfo, onUnlock }) {
 function UploadPanel({ shareId, sessionToken, onUploaded }) {
   const [files, setFiles] = useState([])
   const [uploading, setUploading] = useState(false)
-  const [results, setResults] = useState([]) // {name, ok, error}
+  const [results, setResults] = useState([])
   const [dragOver, setDragOver] = useState(false)
   const inputRef = useRef()
 
@@ -131,12 +131,14 @@ function UploadPanel({ shareId, sessionToken, onUploaded }) {
         formData.append('deviceId', 'immich-share-upload')
         formData.append('fileCreatedAt', new Date(file.lastModified).toISOString())
         formData.append('fileModifiedAt', new Date(file.lastModified).toISOString())
-        formData.append('sessionToken', sessionToken)
+        // NOTE: token goes in the query string, NOT the form body.
+        // The upload route streams req directly to Immich without parsing
+        // the body, so anything appended to FormData would be lost.
 
-        const res = await fetch(`/api/public/upload/${shareId}`, {
-          method: 'POST',
-          body: formData,
-        })
+        const res = await fetch(
+          `/api/public/upload/${shareId}?t=${encodeURIComponent(sessionToken)}`,
+          { method: 'POST', body: formData }
+        )
         const text = await res.text()
         let data
         try { data = JSON.parse(text) } catch { data = { error: text } }
@@ -153,8 +155,7 @@ function UploadPanel({ shareId, sessionToken, onUploaded }) {
 
     setResults(out)
     setUploading(false)
-    const anyOk = out.some(r => r.ok)
-    if (anyOk) {
+    if (out.some(r => r.ok)) {
       setFiles([])
       setTimeout(onUploaded, 800)
     }
@@ -228,7 +229,7 @@ function UploadPanel({ shareId, sessionToken, onUploaded }) {
                   {f.type.startsWith('video/') ? '🎬 ' : '🖼 '}{f.name}
                 </span>
                 <span style={{ color: 'var(--text-dim)', flexShrink: 0 }}>
-                  {(f.size / 1024 / 1024).toFixed(1)}MB
+                  {(f.size / 1024 / 1024).toFixed(1)} MB
                 </span>
                 <button
                   onClick={e => { e.stopPropagation(); removeFile(i) }}

@@ -122,9 +122,11 @@ router.post('/content/:id', async (req, res) => {
   }
 });
 
-// Upload assets to share (requires session token + allow_upload)
+// Upload assets to share
+// Session token is passed as ?t= query param so it doesn't interfere with
+// the multipart body that Express streams directly to Immich.
 router.post('/upload/:id', async (req, res) => {
-  const { sessionToken } = req.body;
+  const sessionToken = req.query.t;
   if (!sessionToken) return res.status(400).json({ error: 'Session token required' });
   if (!verifyToken(req.params.id, sessionToken)) {
     return res.status(401).json({ error: 'Invalid or expired session.' });
