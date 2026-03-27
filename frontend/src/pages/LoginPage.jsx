@@ -2,6 +2,17 @@ import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth.jsx'
 
+function ImmichLogo({ size = 52 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 52 52" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M26 3 L3 26 L26 26 Z" fill="#f44336" opacity="0.93"/>
+      <path d="M26 3 L49 26 L26 26 Z" fill="#4caf50" opacity="0.93"/>
+      <path d="M26 49 L3 26 L26 26 Z" fill="#2196f3" opacity="0.93"/>
+      <path d="M26 49 L49 26 L26 26 Z" fill="#ffc107" opacity="0.93"/>
+    </svg>
+  )
+}
+
 export default function LoginPage() {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -35,148 +46,126 @@ export default function LoginPage() {
     <div style={{
       minHeight: '100vh',
       display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
       background: 'var(--bg)',
+      padding: '24px',
       position: 'relative',
       overflow: 'hidden',
     }}>
-      {/* Decorative background */}
+      {/* Subtle background glow — Immich uses very dark, minimal bg */}
       <div style={{
         position: 'absolute',
-        inset: 0,
-        background: `
-          radial-gradient(ellipse 60% 50% at 80% 20%, rgba(212,168,67,0.06) 0%, transparent 70%),
-          radial-gradient(ellipse 40% 40% at 20% 80%, rgba(96,165,250,0.04) 0%, transparent 60%)
-        `,
+        width: '500px',
+        height: '500px',
+        borderRadius: '50%',
+        background: 'radial-gradient(circle, rgba(33,150,243,0.04) 0%, transparent 70%)',
+        top: '50%',
+        left: '50%',
+        transform: 'translate(-50%, -50%)',
         pointerEvents: 'none',
       }} />
 
-      {/* Photo strip decoration on left (desktop) */}
       <div style={{
-        display: 'none',
-        width: '45%',
-        background: 'var(--bg2)',
-        borderRight: '1.5px solid var(--border)',
-        padding: '60px 48px',
-        flexDirection: 'column',
-        justifyContent: 'center',
-        position: 'relative',
-        overflow: 'hidden',
-      }} className="login-left">
-        <div style={{
-          position: 'absolute',
-          inset: 0,
-          display: 'grid',
-          gridTemplateColumns: 'repeat(3, 1fr)',
-          gap: 3,
-          opacity: 0.15,
-        }}>
-          {Array.from({ length: 12 }).map((_, i) => (
-            <div key={i} style={{
-              background: `hsl(${210 + i * 15}, 20%, ${15 + i * 3}%)`,
-              borderRadius: 4,
-            }} />
-          ))}
-        </div>
-        <div style={{ position: 'relative', zIndex: 1 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 13, marginBottom: 32 }}>
-            <div className="immich-mark" style={{ width: 52, height: 52, borderRadius: 14, fontSize: '1.5rem' }}>📷</div>
-            <div>
-              <div style={{ fontSize: '1.4rem', fontWeight: 800, letterSpacing: '-0.02em' }}>Immich Share</div>
-              <div style={{ color: 'var(--text-dim)', fontSize: '0.85rem', fontWeight: 500 }}>Self-hosted photo sharing</div>
-            </div>
-          </div>
-          <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)', lineHeight: 1.8, maxWidth: 320 }}>
-            Share your Immich albums and photos with anyone via a password-protected link — no Immich account required.
-          </div>
-        </div>
-      </div>
-
-      {/* Login form */}
-      <div style={{
-        flex: 1,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: '40px 20px',
+        width: '100%',
+        maxWidth: '360px',
         position: 'relative',
         zIndex: 1,
       }}>
-        <div style={{ width: '100%', maxWidth: '380px' }}>
-          {/* Logo (mobile / standalone) */}
-          <div style={{ textAlign: 'center', marginBottom: 36 }}>
-            <div style={{
-              width: 60, height: 60,
-              borderRadius: 18,
-              background: 'linear-gradient(135deg, #d4a843 0%, #f5cc6c 55%, #dba93a 100%)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              margin: '0 auto 18px',
-              fontSize: '1.75rem',
-              boxShadow: '0 8px 28px rgba(212,168,67,0.4)',
-            }}>
-              📷
-            </div>
-            <h1 style={{
+        {/* Logo + name */}
+        <div style={{ textAlign: 'center', marginBottom: 32 }}>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+            <ImmichLogo size={40} />
+            <span style={{
               fontSize: '1.6rem',
               fontWeight: 800,
-              letterSpacing: '-0.02em',
-              marginBottom: 5,
+              letterSpacing: '-0.03em',
+              color: 'var(--text)',
             }}>
-              Welcome back
-            </h1>
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', fontWeight: 500 }}>
-              Sign in to the Admin Dashboard
-            </p>
+              immich share
+            </span>
           </div>
-
-          <div style={{
-            background: 'var(--bg2)',
-            border: '1.5px solid var(--border)',
-            borderRadius: 'var(--radius)',
-            padding: '28px',
-            boxShadow: '0 24px 64px rgba(0,0,0,0.4)',
+          <p style={{
+            color: 'var(--text-dim)',
+            fontSize: '0.82rem',
+            fontWeight: 500,
+            marginTop: 4,
           }}>
-            {error && (
-              <div className="error-msg">
-                <span>⚠ </span>{error}
-              </div>
-            )}
-            <form onSubmit={handleSubmit}>
-              <div className="form-group">
-                <label>Username</label>
-                <input
-                  type="text"
-                  value={username}
-                  onChange={e => setUsername(e.target.value)}
-                  placeholder="admin"
-                  autoFocus
-                  required
-                />
-              </div>
-              <div className="form-group" style={{ marginBottom: 22 }}>
-                <label>Password</label>
-                <input
-                  type="password"
-                  value={password}
-                  onChange={e => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  required
-                />
-              </div>
-              <button
-                type="submit"
-                className="btn btn-primary"
-                disabled={loading}
-                style={{ width: '100%', justifyContent: 'center', padding: '11px 18px', fontSize: '0.95rem' }}
-              >
-                {loading ? <span className="loading-spinner" /> : 'Sign In'}
-              </button>
-            </form>
-          </div>
-
-          <div style={{ textAlign: 'center', marginTop: 20, fontSize: '0.75rem', color: 'var(--text-dim)' }}>
-            Immich Share · Admin Console
-          </div>
+            Admin Dashboard
+          </p>
         </div>
+
+        {/* Card */}
+        <div style={{
+          background: 'var(--bg2)',
+          border: '1px solid var(--border-light)',
+          borderRadius: 'var(--radius)',
+          padding: '28px 24px',
+          boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
+        }}>
+          <h1 style={{
+            fontSize: '1rem',
+            fontWeight: 700,
+            marginBottom: 20,
+            color: 'var(--text)',
+          }}>
+            Sign in
+          </h1>
+
+          {error && (
+            <div className="error-msg">
+              {error}
+            </div>
+          )}
+
+          <form onSubmit={handleSubmit}>
+            <div className="form-group">
+              <label>Email / Username</label>
+              <input
+                type="text"
+                value={username}
+                onChange={e => setUsername(e.target.value)}
+                placeholder="admin"
+                autoFocus
+                required
+              />
+            </div>
+            <div className="form-group" style={{ marginBottom: 24 }}>
+              <label>Password</label>
+              <input
+                type="password"
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                placeholder="Password"
+                required
+              />
+            </div>
+            <button
+              type="submit"
+              className="btn btn-primary"
+              disabled={loading}
+              style={{
+                width: '100%',
+                justifyContent: 'center',
+                padding: '10px 18px',
+                fontSize: '0.875rem',
+                fontWeight: 700,
+                borderRadius: 'var(--radius-sm)',
+              }}
+            >
+              {loading ? <span className="loading-spinner" /> : 'Sign in'}
+            </button>
+          </form>
+        </div>
+
+        <p style={{
+          textAlign: 'center',
+          marginTop: 20,
+          fontSize: '0.73rem',
+          color: 'var(--text-dim)',
+        }}>
+          immich share · admin console
+        </p>
       </div>
     </div>
   )

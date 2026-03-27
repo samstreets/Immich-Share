@@ -2,48 +2,51 @@ import React, { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useApi } from '../hooks/useAuth.jsx'
 
-function StatCard({ icon, label, value, sub, color, accentBg }) {
+function StatCard({ icon, label, value, sub, accent }) {
   return (
-    <div className="card" style={{
+    <div style={{
+      background: 'var(--bg2)',
+      border: '1px solid var(--border)',
+      borderRadius: 'var(--radius)',
+      padding: '20px',
       display: 'flex',
-      alignItems: 'flex-start',
-      gap: 16,
-      border: '1.5px solid var(--border)',
-      transition: 'border-color 0.15s, transform 0.15s',
+      flexDirection: 'column',
+      gap: 10,
+      transition: 'border-color 0.15s, background 0.15s',
+      cursor: 'default',
     }}
-      onMouseEnter={e => {
-        e.currentTarget.style.borderColor = `${color}40`
-        e.currentTarget.style.transform = 'translateY(-1px)'
-      }}
-      onMouseLeave={e => {
-        e.currentTarget.style.borderColor = 'var(--border)'
-        e.currentTarget.style.transform = 'translateY(0)'
-      }}
+      onMouseEnter={e => { e.currentTarget.style.background = 'var(--bg3)'; e.currentTarget.style.borderColor = 'var(--border-light)' }}
+      onMouseLeave={e => { e.currentTarget.style.background = 'var(--bg2)'; e.currentTarget.style.borderColor = 'var(--border)' }}
     >
       <div style={{
-        width: 46, height: 46,
-        borderRadius: 12,
-        background: accentBg || `${color}12`,
-        border: `1.5px solid ${color}22`,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        fontSize: '1.3rem',
-        flexShrink: 0,
-      }}>{icon}</div>
+        width: 40, height: 40,
+        borderRadius: 10,
+        background: `${accent}14`,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        fontSize: '1.1rem',
+      }}>
+        {icon}
+      </div>
       <div>
         <div style={{
-          fontSize: '1.75rem',
+          fontSize: '1.6rem',
           fontWeight: 800,
-          lineHeight: 1.1,
-          letterSpacing: '-0.02em',
+          letterSpacing: '-0.03em',
+          lineHeight: 1,
           color: 'var(--text)',
-        }}>{value}</div>
-        <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginTop: 3, fontWeight: 600 }}>
+        }}>
+          {value ?? '—'}
+        </div>
+        <div style={{
+          fontSize: '0.78rem',
+          color: 'var(--text-muted)',
+          marginTop: 5,
+          fontWeight: 500,
+        }}>
           {label}
         </div>
         {sub && (
-          <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginTop: 2 }}>
+          <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)', marginTop: 2 }}>
             {sub}
           </div>
         )}
@@ -52,29 +55,40 @@ function StatCard({ icon, label, value, sub, color, accentBg }) {
   )
 }
 
-function ConnectionDot({ ok }) {
-  if (ok === null) return (
-    <div style={{
-      width: 8, height: 8, borderRadius: '50%',
-      background: 'var(--text-dim)',
-    }} />
+function ConnectionBadge({ status }) {
+  if (status === null) return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <span className="loading-spinner" style={{ width: 10, height: 10, borderWidth: 1.5 }} />
+      <span style={{ fontSize: '0.78rem', color: 'var(--text-dim)' }}>Checking…</span>
+    </div>
   )
+
+  const ok = status?.ok
   return (
-    <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      {ok && (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        {ok && (
+          <div style={{
+            position: 'absolute',
+            width: 14, height: 14, borderRadius: '50%',
+            background: 'var(--green)',
+            opacity: 0.2,
+            animation: 'ping 2s cubic-bezier(0,0,0.2,1) infinite',
+          }} />
+        )}
         <div style={{
-          position: 'absolute',
-          width: 16, height: 16, borderRadius: '50%',
-          background: 'var(--green)',
-          opacity: 0.25,
-          animation: 'ping 1.5s cubic-bezier(0,0,0.2,1) infinite',
+          width: 7, height: 7, borderRadius: '50%',
+          background: ok ? 'var(--green)' : 'var(--red)',
         }} />
-      )}
-      <div style={{
-        width: 8, height: 8, borderRadius: '50%',
-        background: ok ? 'var(--green)' : 'var(--red)',
-      }} />
-      <style>{`@keyframes ping { 75%,100% { transform:scale(2); opacity:0; } }`}</style>
+      </div>
+      <span style={{
+        fontSize: '0.78rem',
+        fontWeight: 600,
+        color: ok ? 'var(--green)' : 'var(--red)',
+      }}>
+        {ok ? 'Connected' : status?.error || 'Disconnected'}
+      </span>
+      <style>{`@keyframes ping { 75%,100% { transform:scale(2.2); opacity:0; } }`}</style>
     </div>
   )
 }
@@ -105,123 +119,147 @@ export default function Dashboard() {
 
   return (
     <div>
-      {/* Page header */}
-      <div style={{ marginBottom: 28 }}>
-        <h1 style={{ fontSize: '1.6rem', fontWeight: 800, letterSpacing: '-0.02em' }}>
+      {/* Page title — matches Immich's "Utilities" header style */}
+      <div style={{ marginBottom: 24 }}>
+        <h1 style={{
+          fontSize: '1.25rem',
+          fontWeight: 700,
+          color: 'var(--text)',
+          letterSpacing: '-0.01em',
+        }}>
           Dashboard
         </h1>
-        <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginTop: 4, fontWeight: 500 }}>
-          Overview of your Immich Share instance
-        </p>
       </div>
 
-      {/* Connection status banner */}
+      {/* Immich connection status — matches the subtle info card style */}
       <div style={{
         background: 'var(--bg2)',
-        border: '1.5px solid var(--border)',
+        border: '1px solid var(--border)',
         borderRadius: 'var(--radius)',
         padding: '14px 18px',
-        marginBottom: 20,
+        marginBottom: 16,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
         flexWrap: 'wrap',
         gap: 12,
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <ConnectionDot ok={immichStatus?.ok ?? null} />
-          <div>
-            <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>
-              Immich Connection
-            </div>
-            <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: 1 }}>
-              {immichStatus === null
-                ? 'Checking connection…'
-                : immichStatus.ok
-                  ? 'Connected and operational'
-                  : `Error: ${immichStatus.error}`}
-            </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <div style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text)' }}>
+            Immich Connection
           </div>
+          <ConnectionBadge status={immichStatus} />
         </div>
         <Link to="/admin/settings" className="btn btn-secondary btn-sm">
-          Configure →
+          Configure
         </Link>
       </div>
 
       {/* Stats grid */}
       {loading ? (
-        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '64px 0', gap: 12, color: 'var(--text-dim)' }}>
-          <span className="loading-spinner" style={{ width: 26, height: 26 }} />
-          <span style={{ fontSize: '0.875rem' }}>Loading stats…</span>
+        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '60px 0', gap: 10, color: 'var(--text-dim)' }}>
+          <span className="loading-spinner" style={{ width: 22, height: 22 }} />
+          <span style={{ fontSize: '0.82rem' }}>Loading…</span>
         </div>
       ) : (
         <div style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))',
-          gap: 14,
-          marginBottom: 28,
+          gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+          gap: 12,
+          marginBottom: 24,
         }}>
+          <StatCard icon="🔗" label="Total Shares"  value={stats?.totalShares ?? 0}  accent="#c4a44a" />
+          <StatCard icon="✅" label="Active"         value={stats?.activeShares ?? 0}  accent="#4ade80" />
+          <StatCard icon="⌛" label="Expired"        value={stats?.expiredShares ?? 0} accent="#fbbf24" />
           <StatCard
-            icon="🔗"
-            label="Total Shares"
-            value={stats?.totalShares ?? 0}
-            color="#d4a843"
-          />
-          <StatCard
-            icon="✅"
-            label="Active Shares"
-            value={stats?.activeShares ?? 0}
-            color="#4ade80"
-          />
-          <StatCard
-            icon="⌛"
-            label="Expired"
-            value={stats?.expiredShares ?? 0}
-            color="#fbbf24"
-          />
-          <StatCard
-            icon="👁️"
+            icon="👁"
             label="Total Views"
             value={stats?.totalViews ?? 0}
             sub={`${stats?.recentViews ?? 0} in last 7 days`}
-            color="#60a5fa"
+            accent="#60a5fa"
           />
         </div>
       )}
 
-      {/* Quick actions */}
+      {/* Quick actions — matches Immich's "Organize your library" card style */}
       <div style={{
         background: 'var(--bg2)',
-        border: '1.5px solid var(--border)',
+        border: '1px solid var(--border)',
         borderRadius: 'var(--radius)',
-        padding: '20px 24px',
+        overflow: 'hidden',
       }}>
         <div style={{
-          fontSize: '0.72rem',
+          padding: '14px 18px',
+          borderBottom: '1px solid var(--border)',
+          fontSize: '0.75rem',
           fontWeight: 700,
-          letterSpacing: '0.08em',
+          color: 'var(--text-muted)',
+          letterSpacing: '0.06em',
           textTransform: 'uppercase',
-          color: 'var(--text-dim)',
-          marginBottom: 14,
         }}>
           Quick Actions
         </div>
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-          <Link to="/admin/shares" className="btn btn-primary">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-            </svg>
-            New Share
+
+        {/* Action list rows — like Immich's utility links */}
+        {[
+          {
+            to: '/admin/shares',
+            icon: (
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+              </svg>
+            ),
+            label: 'Create new share',
+          },
+          {
+            to: '/admin/shares',
+            icon: (
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/>
+                <polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/>
+              </svg>
+            ),
+            label: 'Manage shares',
+          },
+          {
+            to: '/admin/logs',
+            icon: (
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <line x1="16" y1="13" x2="8" y2="13"/>
+              </svg>
+            ),
+            label: 'View activity logs',
+          },
+        ].map(({ to, icon, label }) => (
+          <Link
+            key={label}
+            to={to}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 14,
+              padding: '13px 18px',
+              color: 'var(--text)',
+              textDecoration: 'none',
+              borderBottom: '1px solid var(--border)',
+              fontSize: '0.875rem',
+              fontWeight: 500,
+              transition: 'background 0.12s',
+            }}
+            onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-hover)'}
+            onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+          >
+            <span style={{ color: 'var(--text-muted)', display: 'flex', alignItems: 'center' }}>
+              {icon}
+            </span>
+            {label}
+            <span style={{ marginLeft: 'auto', color: 'var(--text-dim)', fontSize: '0.75rem' }}>→</span>
           </Link>
-          <Link to="/admin/shares" className="btn btn-secondary">View All Shares</Link>
-          <Link to="/admin/logs" className="btn btn-secondary">Activity Logs</Link>
-          <Link to="/admin/settings" className="btn btn-secondary">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-            </svg>
-            Settings
-          </Link>
-        </div>
+        ))}
+
+        <div style={{ height: 1 }} /> {/* remove bottom border on last item */}
       </div>
     </div>
   )

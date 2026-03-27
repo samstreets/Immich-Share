@@ -1,35 +1,55 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import { useApi } from '../hooks/useAuth.jsx'
 
-// ── helpers ───────────────────────────────────────────────────────────────────
-
+// Matches Immich's "System Settings" collapsible card pattern
 function SectionCard({ title, subtitle, icon, children, style }) {
   return (
     <div style={{
       background: 'var(--bg2)',
-      border: '1.5px solid var(--border)',
+      border: '1px solid var(--border)',
       borderRadius: 'var(--radius)',
-      marginBottom: 20,
+      marginBottom: 12,
       overflow: 'hidden',
+      transition: 'border-color 0.15s',
       ...style,
     }}>
+      {/* Header row — matches Immich's expand-row style */}
       <div style={{
-        padding: '14px 24px',
-        borderBottom: '1.5px solid var(--border)',
-        background: 'var(--bg3)',
-        display: 'flex', alignItems: 'center', gap: 10,
+        padding: '16px 20px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 14,
+        borderBottom: '1px solid var(--border)',
+        background: 'transparent',
       }}>
-        {icon && <span style={{ fontSize: '1rem' }}>{icon}</span>}
+        {icon && (
+          <div style={{
+            width: 34, height: 34,
+            borderRadius: 8,
+            background: 'var(--bg3)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            flexShrink: 0,
+          }}>
+            {icon}
+          </div>
+        )}
         <div>
-          <h2 style={{ fontSize: '0.9rem', fontWeight: 700, letterSpacing: '-0.01em' }}>{title}</h2>
+          <div style={{
+            fontSize: '0.9rem',
+            fontWeight: 700,
+            color: 'var(--accent)',
+            letterSpacing: '-0.01em',
+          }}>
+            {title}
+          </div>
           {subtitle && (
-            <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginTop: 1, fontWeight: 500 }}>
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginTop: 1 }}>
               {subtitle}
             </div>
           )}
         </div>
       </div>
-      <div style={{ padding: '24px' }}>
+      <div style={{ padding: '20px' }}>
         {children}
       </div>
     </div>
@@ -40,15 +60,14 @@ function StatusPill({ ok, label }) {
   return (
     <span style={{
       display: 'inline-flex', alignItems: 'center', gap: 5,
-      padding: '3px 10px', borderRadius: 99, fontSize: '0.72rem', fontWeight: 700,
-      background: ok ? 'rgba(74,222,128,0.1)' : 'rgba(248,113,113,0.1)',
+      padding: '3px 10px', borderRadius: 999, fontSize: '0.7rem', fontWeight: 700,
+      background: ok ? 'rgba(74,222,128,0.08)' : 'rgba(248,113,113,0.08)',
       color: ok ? 'var(--green)' : 'var(--red)',
-      border: `1px solid ${ok ? 'rgba(74,222,128,0.25)' : 'rgba(248,113,113,0.25)'}`,
+      border: `1px solid ${ok ? 'rgba(74,222,128,0.2)' : 'rgba(248,113,113,0.2)'}`,
     }}>
       <span style={{
-        width: 6, height: 6, borderRadius: '50%',
+        width: 5, height: 5, borderRadius: '50%',
         background: ok ? 'var(--green)' : 'var(--red)',
-        flexShrink: 0,
       }} />
       {label}
     </span>
@@ -73,8 +92,8 @@ function UrlListEditor({ value, onChange }) {
 
   function add() {
     const cleaned = validate(draft)
-    if (!cleaned) { setError('Enter a valid URL (e.g. https://share.example.com) or * to allow all.'); return }
-    if (urls.includes(cleaned)) { setError('That URL is already in the list.'); return }
+    if (!cleaned) { setError('Enter a valid URL or * to allow all.'); return }
+    if (urls.includes(cleaned)) { setError('Already in list.'); return }
     setError(''); setDraft('')
     onChange([...urls, cleaned].join('\n'))
   }
@@ -84,24 +103,23 @@ function UrlListEditor({ value, onChange }) {
   return (
     <div>
       {urls.length > 0 && (
-        <div style={{ marginBottom: 10, display: 'flex', flexDirection: 'column', gap: 5 }}>
+        <div style={{ marginBottom: 10, display: 'flex', flexDirection: 'column', gap: 4 }}>
           {urls.map((u, i) => (
             <div key={i} style={{
               display: 'flex', alignItems: 'center', gap: 8,
-              background: 'var(--bg3)', border: '1.5px solid var(--border)',
-              borderRadius: 'var(--radius-sm)', padding: '7px 12px',
+              background: 'var(--bg3)', border: '1px solid var(--border)',
+              borderRadius: 'var(--radius-sm)', padding: '6px 12px',
             }}>
               <span style={{
-                flex: 1, fontFamily: 'monospace', fontSize: '0.82rem',
-                color: u === '*' ? 'var(--yellow)' : 'var(--accent)',
-                fontWeight: 600,
+                flex: 1, fontFamily: 'monospace', fontSize: '0.8rem',
+                color: u === '*' ? 'var(--yellow)' : 'var(--accent)', fontWeight: 600,
               }}>
-                {u === '*' ? '* — allow all origins' : u}
+                {u === '*' ? '* — all origins' : u}
               </span>
               <button type="button" onClick={() => remove(i)} style={{
                 background: 'none', border: 'none', cursor: 'pointer',
-                color: 'var(--text-dim)', fontSize: '0.9rem', padding: '0 2px', flexShrink: 0,
-              }} title="Remove">✕</button>
+                color: 'var(--text-dim)', fontSize: '0.9rem', padding: 0,
+              }}>✕</button>
             </div>
           ))}
         </div>
@@ -114,11 +132,11 @@ function UrlListEditor({ value, onChange }) {
           placeholder="https://share.yourdomain.com  or  *"
           style={{ flex: 1 }}
         />
-        <button type="button" className="btn btn-secondary" onClick={add} style={{ flexShrink: 0 }}>
-          + Add
+        <button type="button" className="btn btn-secondary btn-sm" onClick={add} style={{ flexShrink: 0 }}>
+          Add
         </button>
       </div>
-      {error && <div style={{ fontSize: '0.78rem', color: 'var(--red)', marginTop: 6, fontWeight: 500 }}>{error}</div>}
+      {error && <div style={{ fontSize: '0.75rem', color: 'var(--red)', marginTop: 5 }}>{error}</div>}
     </div>
   )
 }
@@ -126,19 +144,16 @@ function UrlListEditor({ value, onChange }) {
 function Msg({ msg }) {
   if (!msg) return null
   return (
-    <div className={msg.type === 'success' ? 'success-msg' : 'error-msg'} style={{ marginBottom: 16 }}>
-      {msg.type === 'success' ? '✓ ' : '⚠ '}{msg.text}
+    <div className={msg.type === 'success' ? 'success-msg' : 'error-msg'}>
+      {msg.text}
     </div>
   )
 }
 
-// ── main component ────────────────────────────────────────────────────────────
 export default function SettingsPage() {
   const api = useApi()
-
   const [loading, setLoading] = useState(true)
 
-  // Immich settings
   const [immichUrl, setImmichUrl] = useState('')
   const [apiKeyRaw, setApiKeyRaw] = useState('')
   const [showApiKey, setShowApiKey] = useState(false)
@@ -147,23 +162,19 @@ export default function SettingsPage() {
   const [immichMsg, setImmichMsg] = useState(null)
   const [immichSaving, setImmichSaving] = useState(false)
 
-  // App settings
   const [externalUrl, setExternalUrl] = useState('')
   const [appName, setAppName] = useState('')
   const [appMsg, setAppMsg] = useState(null)
   const [appSaving, setAppSaving] = useState(false)
 
-  // CORS
   const [allowedOrigins, setAllowedOrigins] = useState('')
   const [corsMsg, setCorsMsg] = useState(null)
   const [corsSaving, setCorsSaving] = useState(false)
 
-  // Admin password
   const [pwForm, setPwForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' })
   const [pwMsg, setPwMsg] = useState(null)
   const [pwSaving, setPwSaving] = useState(false)
 
-  // Load all settings
   useEffect(() => {
     async function load() {
       try {
@@ -182,16 +193,11 @@ export default function SettingsPage() {
     load()
   }, [])
 
-  // ── Save handlers ─────────────────────────────────────────────────────────
-
   async function saveImmich(e) {
     e?.preventDefault()
     setImmichSaving(true); setImmichMsg(null); setTestResult(null)
     try {
-      await api('/admin/settings', {
-        method: 'PUT',
-        body: { immich_url: immichUrl, immich_api_key: apiKeyRaw },
-      })
+      await api('/admin/settings', { method: 'PUT', body: { immich_url: immichUrl, immich_api_key: apiKeyRaw } })
       setImmichMsg({ type: 'success', text: 'Immich connection settings saved.' })
     } catch (err) {
       setImmichMsg({ type: 'error', text: err.message })
@@ -201,11 +207,7 @@ export default function SettingsPage() {
   async function testConnection() {
     setTesting(true); setTestResult(null)
     try {
-      // Save first so the test uses the current form values
-      await api('/admin/settings', {
-        method: 'PUT',
-        body: { immich_url: immichUrl, immich_api_key: apiKeyRaw },
-      })
+      await api('/admin/settings', { method: 'PUT', body: { immich_url: immichUrl, immich_api_key: apiKeyRaw } })
       const result = await api('/admin/immich/test')
       setTestResult(result)
     } catch (err) {
@@ -217,10 +219,7 @@ export default function SettingsPage() {
     e?.preventDefault()
     setAppSaving(true); setAppMsg(null)
     try {
-      await api('/admin/settings', {
-        method: 'PUT',
-        body: { external_url: externalUrl, app_name: appName },
-      })
+      await api('/admin/settings', { method: 'PUT', body: { external_url: externalUrl, app_name: appName } })
       setAppMsg({ type: 'success', text: 'App settings saved.' })
     } catch (err) {
       setAppMsg({ type: 'error', text: err.message })
@@ -230,10 +229,7 @@ export default function SettingsPage() {
   async function saveCors() {
     setCorsSaving(true); setCorsMsg(null)
     try {
-      await api('/admin/settings', {
-        method: 'PUT',
-        body: { allowed_origins: allowedOrigins },
-      })
+      await api('/admin/settings', { method: 'PUT', body: { allowed_origins: allowedOrigins } })
       setCorsMsg({ type: 'success', text: 'CORS origins saved.' })
     } catch (err) {
       setCorsMsg({ type: 'error', text: err.message })
@@ -250,10 +246,7 @@ export default function SettingsPage() {
     }
     setPwSaving(true)
     try {
-      await api('/auth/change-password', {
-        method: 'POST',
-        body: { currentPassword: pwForm.currentPassword, newPassword: pwForm.newPassword },
-      })
+      await api('/auth/change-password', { method: 'POST', body: { currentPassword: pwForm.currentPassword, newPassword: pwForm.newPassword } })
       setPwMsg({ type: 'success', text: 'Password changed successfully.' })
       setPwForm({ currentPassword: '', newPassword: '', confirmPassword: '' })
     } catch (err) {
@@ -261,254 +254,199 @@ export default function SettingsPage() {
     } finally { setPwSaving(false) }
   }
 
-  // ── Render ─────────────────────────────────────────────────────────────────
+  const EyeIcon = ({ visible }) => visible ? (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/>
+      <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
+      <line x1="1" y1="1" x2="23" y2="23"/>
+    </svg>
+  ) : (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+      <circle cx="12" cy="12" r="3"/>
+    </svg>
+  )
+
+  const ConnIcon = () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M5 12.55a11 11 0 0 1 14.08 0"/>
+      <path d="M1.42 9a16 16 0 0 1 21.16 0"/>
+      <path d="M8.53 16.11a6 6 0 0 1 6.95 0"/>
+      <line x1="12" y1="20" x2="12.01" y2="20"/>
+    </svg>
+  )
+  const GlobeIcon = () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="10"/>
+      <line x1="2" y1="12" x2="22" y2="12"/>
+      <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+    </svg>
+  )
+  const LockIcon = () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+      <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+    </svg>
+  )
+  const KeyIcon = () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/>
+    </svg>
+  )
 
   if (loading) return (
-    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '100px 0', gap: 14, color: 'var(--text-dim)' }}>
-      <span className="loading-spinner" style={{ width: 26, height: 26 }} />
-      <span style={{ fontSize: '0.875rem', fontWeight: 500 }}>Loading settings…</span>
+    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '100px 0', gap: 12, color: 'var(--text-dim)' }}>
+      <span className="loading-spinner" style={{ width: 22, height: 22 }} />
+      <span style={{ fontSize: '0.82rem' }}>Loading settings…</span>
     </div>
   )
 
-  const originsCount = allowedOrigins
-    ? allowedOrigins.split('\n').map(u => u.trim()).filter(Boolean).length
-    : 0
-
   return (
-    <div style={{ maxWidth: 680 }}>
-      {/* Page header */}
-      <div style={{ marginBottom: 28 }}>
-        <h1 style={{ fontSize: '1.6rem', fontWeight: 800, letterSpacing: '-0.02em' }}>Settings</h1>
-        <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginTop: 4, fontWeight: 500 }}>
-          All configuration lives here — no environment file needed after first boot.
-        </p>
+    <div style={{ maxWidth: 660 }}>
+      {/* Page title — matches Immich "System Settings" style */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginBottom: 24,
+        flexWrap: 'wrap',
+        gap: 12,
+      }}>
+        <h1 style={{ fontSize: '1.25rem', fontWeight: 700, letterSpacing: '-0.01em' }}>
+          Settings
+        </h1>
       </div>
 
-      {/* ── Immich Connection ─────────────────────────────────────────────── */}
+      {/* ── Immich Connection ─────────────────────────────────── */}
       <SectionCard
-        icon="🔌"
-        title="Immich Connection"
-        subtitle="URL and API key for your Immich instance"
+        icon={<ConnIcon />}
+        title="Authentication Settings"
+        subtitle="Manage Immich URL and API key"
       >
         <Msg msg={immichMsg} />
-
-        {/* Connection status inline */}
         {testResult && (
           <div style={{
             display: 'flex', alignItems: 'center', gap: 10,
-            padding: '10px 14px', borderRadius: 'var(--radius-sm)',
-            background: testResult.ok ? 'rgba(74,222,128,0.06)' : 'rgba(248,113,113,0.06)',
-            border: `1.5px solid ${testResult.ok ? 'rgba(74,222,128,0.2)' : 'rgba(248,113,113,0.2)'}`,
-            marginBottom: 16,
+            padding: '9px 13px', borderRadius: 'var(--radius-sm)',
+            background: testResult.ok ? 'rgba(74,222,128,0.05)' : 'rgba(248,113,113,0.05)',
+            border: `1px solid ${testResult.ok ? 'rgba(74,222,128,0.18)' : 'rgba(248,113,113,0.18)'}`,
+            marginBottom: 14,
           }}>
             <StatusPill ok={testResult.ok} label={testResult.ok ? 'Connected' : 'Failed'} />
-            <span style={{ fontSize: '0.82rem', color: testResult.ok ? 'var(--green)' : 'var(--red)', fontWeight: 500 }}>
+            <span style={{ fontSize: '0.8rem', color: testResult.ok ? 'var(--green)' : 'var(--red)', fontWeight: 500 }}>
               {testResult.ok ? 'Successfully connected to Immich.' : testResult.error}
             </span>
           </div>
         )}
-
         <form onSubmit={saveImmich}>
           <div className="form-group">
             <label>Immich Server URL</label>
-            <input
-              type="url"
-              value={immichUrl}
-              onChange={e => setImmichUrl(e.target.value)}
-              placeholder="http://192.168.1.100:2283"
-            />
+            <input type="url" value={immichUrl} onChange={e => setImmichUrl(e.target.value)} placeholder="http://192.168.1.100:2283" />
             <span className="hint">Base URL of your Immich instance, no trailing slash.</span>
           </div>
-
           <div className="form-group">
             <label>API Key</label>
-            <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{ display: 'flex', gap: 7 }}>
               <input
                 type={showApiKey ? 'text' : 'password'}
                 value={apiKeyRaw}
                 onChange={e => setApiKeyRaw(e.target.value)}
                 placeholder="Paste your Immich API key"
-                style={{ flex: 1, fontFamily: showApiKey ? 'monospace' : 'inherit' }}
+                style={{ flex: 1, fontFamily: showApiKey ? 'monospace' : 'inherit', fontSize: showApiKey ? '0.78rem' : '0.875rem' }}
               />
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={() => setShowApiKey(v => !v)}
-                style={{ flexShrink: 0, minWidth: 42 }}
-                title={showApiKey ? 'Hide key' : 'Show key'}
-              >
-                {showApiKey ? (
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
-                    <line x1="1" y1="1" x2="23" y2="23"/>
-                  </svg>
-                ) : (
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
-                  </svg>
-                )}
+              <button type="button" className="btn btn-secondary btn-sm" onClick={() => setShowApiKey(v => !v)} title={showApiKey ? 'Hide' : 'Show'}>
+                <EyeIcon visible={showApiKey} />
               </button>
             </div>
-            <span className="hint">
-              Generate in Immich → Account Settings → API Keys. Stored encrypted in your local database.
-            </span>
+            <span className="hint">Generate in Immich → Account Settings → API Keys.</span>
           </div>
-
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-            <button type="submit" className="btn btn-primary" disabled={immichSaving}>
-              {immichSaving ? <span className="loading-spinner" /> : 'Save Connection'}
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button type="submit" className="btn btn-primary btn-sm" disabled={immichSaving}>
+              {immichSaving ? <span className="loading-spinner" /> : 'Save'}
             </button>
-            <button type="button" className="btn btn-secondary" onClick={testConnection} disabled={testing}>
-              {testing ? <span className="loading-spinner" /> : (
-                <>
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="13 2 13 9 20 9"/><path d="M11 2H4a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-7"/>
-                  </svg>
-                  Test Connection
-                </>
-              )}
+            <button type="button" className="btn btn-secondary btn-sm" onClick={testConnection} disabled={testing}>
+              {testing ? <span className="loading-spinner" /> : 'Test Connection'}
             </button>
           </div>
         </form>
       </SectionCard>
 
-      {/* ── App Settings ─────────────────────────────────────────────────── */}
-      <SectionCard
-        icon="🌐"
-        title="App Settings"
-        subtitle="Public URL and branding"
-      >
+      {/* ── App Settings ──────────────────────────────────────── */}
+      <SectionCard icon={<GlobeIcon />} title="App Settings" subtitle="Public URL and branding">
         <Msg msg={appMsg} />
         <form onSubmit={saveApp}>
           <div className="form-group">
             <label>External / Public URL</label>
-            <input
-              type="url"
-              value={externalUrl}
-              onChange={e => setExternalUrl(e.target.value)}
-              placeholder="https://share.yourdomain.com"
-            />
-            <span className="hint">
-              The publicly reachable URL of this app. Used to build share links shown to viewers.
-            </span>
+            <input type="url" value={externalUrl} onChange={e => setExternalUrl(e.target.value)} placeholder="https://share.yourdomain.com" />
+            <span className="hint">Used to build share links shown to viewers.</span>
           </div>
-
           <div className="form-group">
             <label>App Name</label>
-            <input
-              value={appName}
-              onChange={e => setAppName(e.target.value)}
-              placeholder="Immich Share"
-            />
-            <span className="hint">Shown to viewers on the password gate and share pages.</span>
+            <input value={appName} onChange={e => setAppName(e.target.value)} placeholder="Immich Share" />
+            <span className="hint">Shown on the password gate and share pages.</span>
           </div>
-
-          <button type="submit" className="btn btn-primary" disabled={appSaving}>
-            {appSaving ? <span className="loading-spinner" /> : 'Save App Settings'}
+          <button type="submit" className="btn btn-primary btn-sm" disabled={appSaving}>
+            {appSaving ? <span className="loading-spinner" /> : 'Save'}
           </button>
         </form>
       </SectionCard>
 
-      {/* ── CORS Origins ─────────────────────────────────────────────────── */}
-      <SectionCard
-        icon="🔒"
-        title="Allowed Origins (CORS)"
-        subtitle={originsCount > 0 ? `${originsCount} origin${originsCount !== 1 ? 's' : ''} configured` : 'All origins allowed (open)'}
-      >
+      {/* ── CORS Origins ──────────────────────────────────────── */}
+      <SectionCard icon={<LockIcon />} title="Allowed Origins (CORS)" subtitle="Restrict cross-origin API access">
         <Msg msg={corsMsg} />
-
-        {originsCount === 0 && (
-          <div style={{
-            padding: '10px 14px', borderRadius: 'var(--radius-sm)', marginBottom: 14,
-            background: 'rgba(251,191,36,0.07)', border: '1.5px solid rgba(251,191,36,0.22)',
-            fontSize: '0.8rem', color: 'var(--yellow)', fontWeight: 500,
-          }}>
-            ⚠ No origins configured — all cross-origin requests are currently allowed.
-          </div>
-        )}
-
-        <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginBottom: 14, lineHeight: 1.7 }}>
-          Restrict which origins can make cross-origin API requests. Leave empty to allow all.
-          Use{' '}
-          <code style={{ color: 'var(--yellow)', background: 'var(--bg3)', padding: '1px 5px', borderRadius: 3, fontSize: '0.85em' }}>*</code>
-          {' '}to explicitly allow all origins.
+        <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: 12, lineHeight: 1.65 }}>
+          Leave empty to allow all origins. Use{' '}
+          <code style={{ color: 'var(--yellow)', background: 'var(--bg3)', padding: '1px 5px', borderRadius: 3 }}>*</code>
+          {' '}to explicitly allow all.
         </p>
-
-        <UrlListEditor
-          value={allowedOrigins}
-          onChange={setAllowedOrigins}
-        />
-
-        <div style={{ marginTop: 16 }}>
-          <button type="button" className="btn btn-primary" disabled={corsSaving} onClick={saveCors}>
+        <UrlListEditor value={allowedOrigins} onChange={setAllowedOrigins} />
+        <div style={{ marginTop: 14 }}>
+          <button type="button" className="btn btn-primary btn-sm" disabled={corsSaving} onClick={saveCors}>
             {corsSaving ? <span className="loading-spinner" /> : 'Save Origins'}
           </button>
         </div>
       </SectionCard>
 
-      {/* ── Admin Password ────────────────────────────────────────────────── */}
-      <SectionCard
-        icon="🔑"
-        title="Change Admin Password"
-        subtitle="Update your login credentials"
-      >
+      {/* ── Admin Password ────────────────────────────────────── */}
+      <SectionCard icon={<KeyIcon />} title="Change Admin Password" subtitle="Update your login credentials">
         <Msg msg={pwMsg} />
         <form onSubmit={changePassword}>
           <div className="form-group">
             <label>Current Password</label>
-            <input
-              type="password"
-              value={pwForm.currentPassword}
-              onChange={e => setPwForm(f => ({ ...f, currentPassword: e.target.value }))}
-              placeholder="••••••••"
-              required
-            />
+            <input type="password" value={pwForm.currentPassword} onChange={e => setPwForm(f => ({ ...f, currentPassword: e.target.value }))} placeholder="Current password" required />
           </div>
           <div className="form-row">
             <div className="form-group">
               <label>New Password</label>
-              <input
-                type="password"
-                value={pwForm.newPassword}
-                onChange={e => setPwForm(f => ({ ...f, newPassword: e.target.value }))}
-                placeholder="Min 8 characters"
-                required minLength={8}
-              />
+              <input type="password" value={pwForm.newPassword} onChange={e => setPwForm(f => ({ ...f, newPassword: e.target.value }))} placeholder="Min 8 characters" required minLength={8} />
             </div>
             <div className="form-group">
               <label>Confirm New Password</label>
-              <input
-                type="password"
-                value={pwForm.confirmPassword}
-                onChange={e => setPwForm(f => ({ ...f, confirmPassword: e.target.value }))}
-                placeholder="Repeat password"
-                required
-              />
+              <input type="password" value={pwForm.confirmPassword} onChange={e => setPwForm(f => ({ ...f, confirmPassword: e.target.value }))} placeholder="Repeat password" required />
             </div>
           </div>
-          <button type="submit" className="btn btn-primary" disabled={pwSaving}>
+          <button type="submit" className="btn btn-primary btn-sm" disabled={pwSaving}>
             {pwSaving ? <span className="loading-spinner" /> : 'Update Password'}
           </button>
         </form>
       </SectionCard>
 
-      {/* ── Info banner ───────────────────────────────────────────────────── */}
+      {/* ── Info ──────────────────────────────────────────────── */}
       <div style={{
-        padding: '14px 18px',
+        padding: '12px 16px',
         borderRadius: 'var(--radius)',
         background: 'var(--bg2)',
-        border: '1.5px solid var(--border)',
-        fontSize: '0.8rem',
+        border: '1px solid var(--border)',
+        fontSize: '0.75rem',
         color: 'var(--text-dim)',
         lineHeight: 1.7,
       }}>
-        <strong style={{ color: 'var(--text-muted)' }}>ℹ Infrastructure settings</strong> — the following are
-        set via environment variables and cannot be changed here:{' '}
-        <code style={{ color: 'var(--text-muted)', fontSize: '0.85em' }}>JWT_SECRET</code>,{' '}
-        <code style={{ color: 'var(--text-muted)', fontSize: '0.85em' }}>PORT</code>,{' '}
-        <code style={{ color: 'var(--text-muted)', fontSize: '0.85em' }}>DB_PATH</code>,{' '}
-        <code style={{ color: 'var(--text-muted)', fontSize: '0.85em' }}>NODE_ENV</code>.
-        Everything else is managed here.
+        <strong style={{ color: 'var(--text-muted)' }}>Infrastructure settings</strong> — set via environment variables only:{' '}
+        {['JWT_SECRET', 'PORT', 'DB_PATH', 'NODE_ENV'].map(k => (
+          <code key={k} style={{ color: 'var(--text-muted)', background: 'var(--bg3)', padding: '1px 5px', borderRadius: 3, marginRight: 4, fontSize: '0.85em' }}>
+            {k}
+          </code>
+        ))}
       </div>
     </div>
   )
