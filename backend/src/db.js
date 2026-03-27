@@ -73,9 +73,6 @@ function initDb() {
     db.exec(`ALTER TABLE shares ADD COLUMN allow_upload INTEGER DEFAULT 0`);
   }
   if (!cols.includes('slug')) {
-    // SQLite does not support ADD COLUMN with a UNIQUE constraint.
-    // Add the column without UNIQUE, then create a partial unique index
-    // (WHERE slug IS NOT NULL) so that multiple NULL slugs are allowed.
     db.exec(`ALTER TABLE shares ADD COLUMN slug TEXT`);
     db.exec(`
       CREATE UNIQUE INDEX IF NOT EXISTS idx_shares_slug
@@ -109,26 +106,33 @@ function initDb() {
   // Create default admin if none exists
   const adminCount = db.prepare('SELECT COUNT(*) as count FROM admin_users').get();
   if (adminCount.count === 0) {
+    // Use env var only on very first boot to set initial password, then it's DB-only
     const defaultPassword = process.env.ADMIN_PASSWORD || 'admin';
     const hash = bcrypt.hashSync(defaultPassword, 12);
     db.prepare('INSERT INTO admin_users (username, password_hash) VALUES (?, ?)').run('admin', hash);
-    console.log(`✅ Default admin created. Username: admin, Password: ${defaultPassword}`);
-    console.log('⚠️  Please change the default password immediately!');
+    console.log(`✅ Default admin created (username: admin). Change the password in Settings immediately!`);
   }
 
-  // Default settings
+  // Default settings — all empty, user must configure via Settings UI
+  // Only fallback to env vars on first boot so existing deployments aren't broken
   const defaults = {
-    immich_url: process.env.IMMICH_URL || '',
-    immich_api_key: process.env.IMMICH_API_KEY || '',
-    external_url: process.env.EXTERNAL_URL || `http://localhost:${process.env.PORT || 3000}`,
+    immich_url: '',
+    immich_api_key: '',
+    external_url: `http://localhost:${process.env.PORT || 3000}`,
     app_name: 'Immich Share',
-    allowed_origins: process.env.ALLOWED_ORIGINS || '',
+    allowed_origins: '',
   };
 
   for (const [key, value] of Object.entries(defaults)) {
     const existing = db.prepare('SELECT key FROM settings WHERE key = ?').get(key);
     if (!existing) {
-      db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run(key, value);
+      // On first boot, seed from env vars if present so existing deployments work
+      let seedValue = value;
+      if (key === 'immich_url' && process.env.IMMICH_URL) seedValue = process.env.IMMICH_URL;
+      if (key === 'immich_api_key' && process.env.IMMICH_API_KEY) seedValue = process.env.IMMICH_API_KEY;
+      if (key === 'external_url' && process.env.EXTERNAL_URL) seedValue = process.env.EXTERNAL_URL;
+      if (key === 'allowed_origins' && process.env.ALLOWED_ORIGINS) seedValue = process.env.ALLOWED_ORIGINS;
+      db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run(key, seedValue || value);
     }
   }
 

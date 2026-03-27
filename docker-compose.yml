@@ -10,24 +10,25 @@ services:
     volumes:
       - immich-share-data:/app/data
     environment:
-      # ── Required ─────────────────────────────────────────────────────────
       NODE_ENV: production
-      # URL of your Immich server (can also be set in Admin → Settings)
-      IMMICH_URL:
-      # Immich API key (can also be set in Admin → Settings)
-      IMMICH_API_KEY:
 
-      # ── Recommended ───────────────────────────────────────────────────────
-      # Public-facing URL of THIS app — used to build share links
-      EXTERNAL_URL: http://localhost:3000
-      # Change this! Used to sign admin JWT tokens
+      # ── Required ────────────────────────────────────────────────────────────
+      # Change this! Used to sign admin JWT tokens.
       JWT_SECRET: change-me-to-a-long-random-string
-      # Default admin password (only used on first run)
+
+      # ── Optional ────────────────────────────────────────────────────────────
+      # Default admin password (only used on very first run, before the DB exists)
       ADMIN_PASSWORD: admin
 
-      # ── Optional ──────────────────────────────────────────────────────────
       PORT: 3000
       DB_PATH: /app/data/app.db
+
+      # ── Legacy first-boot seeding (optional) ────────────────────────────────
+      # Set these to pre-populate the Settings UI on first boot only.
+      # After first boot, configure everything via Admin → Settings.
+      # IMMICH_URL: http://192.168.1.100:2283
+      # IMMICH_API_KEY: your-api-key-here
+      # EXTERNAL_URL: https://share.yourdomain.com
 
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/auth/me"]
