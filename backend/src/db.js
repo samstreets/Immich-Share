@@ -73,7 +73,14 @@ function initDb() {
     db.exec(`ALTER TABLE shares ADD COLUMN allow_upload INTEGER DEFAULT 0`);
   }
   if (!cols.includes('slug')) {
-    db.exec(`ALTER TABLE shares ADD COLUMN slug TEXT UNIQUE`);
+    // SQLite does not support ADD COLUMN with a UNIQUE constraint.
+    // Add the column without UNIQUE, then create a partial unique index
+    // (WHERE slug IS NOT NULL) so that multiple NULL slugs are allowed.
+    db.exec(`ALTER TABLE shares ADD COLUMN slug TEXT`);
+    db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_shares_slug
+      ON shares(slug) WHERE slug IS NOT NULL
+    `);
   }
 
   // Share access logs
