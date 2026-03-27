@@ -154,7 +154,7 @@ export default function AdminLayout() {
             alignItems: 'center',
             gap: 10,
             padding: '8px 10px',
-            borderRadius: var(--radius-sm),
+            borderRadius: 'var(--radius-sm)',
             marginBottom: 6,
           }}>
             {/* Avatar circle — Immich's user avatar style */}
