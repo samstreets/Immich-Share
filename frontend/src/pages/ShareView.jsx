@@ -1,16 +1,12 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { useParams } from 'react-router-dom'
 
-// Safe JSON fetch — never throws on non-JSON bodies
 async function safeFetch(url, options = {}) {
   const res = await fetch(url, options)
   const text = await res.text()
   let data
-  try {
-    data = JSON.parse(text)
-  } catch {
-    data = { error: text || `HTTP ${res.status}` }
-  }
+  try { data = JSON.parse(text) }
+  catch { data = { error: text || `HTTP ${res.status}` } }
   return { ok: res.ok, status: res.status, data }
 }
 
@@ -46,27 +42,47 @@ function PasswordGate({ shareInfo, onUnlock }) {
       alignItems: 'center',
       justifyContent: 'center',
       padding: '20px',
-      background: 'radial-gradient(ellipse at 50% 0%, rgba(124,106,247,0.07) 0%, transparent 65%)',
+      background: `var(--bg)`,
+      position: 'relative',
     }}>
-      <div style={{ width: '100%', maxWidth: '380px' }}>
+      <div style={{
+        position: 'absolute', inset: 0,
+        background: `radial-gradient(ellipse 60% 40% at 50% 0%, rgba(212,168,67,0.07) 0%, transparent 70%)`,
+        pointerEvents: 'none',
+      }} />
+
+      <div style={{ width: '100%', maxWidth: '380px', position: 'relative', zIndex: 1 }}>
         <div style={{ textAlign: 'center', marginBottom: 28 }}>
           <div style={{
-            width: 56, height: 56, borderRadius: 16,
-            background: 'linear-gradient(135deg, #7c6af7, #a78bfa)',
+            width: 62, height: 62, borderRadius: 18,
+            background: 'linear-gradient(135deg, #d4a843, #f5cc6c)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            margin: '0 auto 16px', fontSize: '1.6rem',
+            margin: '0 auto 18px',
+            fontSize: '1.8rem',
+            boxShadow: '0 10px 32px rgba(212,168,67,0.4)',
           }}>🔒</div>
-          <h1 style={{ fontSize: '1.3rem', fontWeight: 600, marginBottom: 4 }}>{shareInfo.name}</h1>
+          <h1 style={{
+            fontSize: '1.25rem', fontWeight: 800,
+            letterSpacing: '-0.01em', marginBottom: 6,
+          }}>{shareInfo.name}</h1>
           {shareInfo.description && (
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>{shareInfo.description}</p>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: 6 }}>
+              {shareInfo.description}
+            </p>
           )}
-          <p style={{ color: 'var(--text-dim)', fontSize: '0.8rem', marginTop: 8 }}>
+          <p style={{ color: 'var(--text-dim)', fontSize: '0.78rem', fontWeight: 500 }}>
             Shared via {shareInfo.appName}
           </p>
         </div>
 
-        <div className="card">
-          {error && <div className="error-msg">{error}</div>}
+        <div style={{
+          background: 'var(--bg2)',
+          border: '1.5px solid var(--border)',
+          borderRadius: 'var(--radius)',
+          padding: '26px',
+          boxShadow: '0 24px 60px rgba(0,0,0,0.5)',
+        }}>
+          {error && <div className="error-msg">⚠ {error}</div>}
           <form onSubmit={submit}>
             <div className="form-group">
               <label>Password</label>
@@ -82,7 +98,7 @@ function PasswordGate({ shareInfo, onUnlock }) {
             <button
               type="submit"
               className="btn btn-primary"
-              style={{ width: '100%', justifyContent: 'center' }}
+              style={{ width: '100%', justifyContent: 'center', padding: '11px 18px' }}
               disabled={loading}
             >
               {loading ? <span className="loading-spinner" /> : 'View Photos →'}
@@ -94,9 +110,9 @@ function PasswordGate({ shareInfo, onUnlock }) {
   )
 }
 
-// ── Download ZIP button ───────────────────────────────────────────────────────
+// ── Download ZIP ──────────────────────────────────────────────────────────────
 function DownloadZipButton({ shareId, sessionToken, assetCount, shareName }) {
-  const [state, setState] = useState('idle') // idle | downloading | done | error
+  const [state, setState] = useState('idle')
   const [errorMsg, setErrorMsg] = useState('')
 
   async function handleDownload() {
@@ -105,56 +121,47 @@ function DownloadZipButton({ shareId, sessionToken, assetCount, shareName }) {
     try {
       const t = encodeURIComponent(sessionToken)
       const res = await fetch(`/api/public/zip/${shareId}?t=${t}`)
-      if (!res.ok) {
-        const text = await res.text()
-        throw new Error(text || `HTTP ${res.status}`)
-      }
-      // Stream into a blob then trigger download
+      if (!res.ok) { const text = await res.text(); throw new Error(text || `HTTP ${res.status}`) }
       const blob = await res.blob()
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
       const safe = (shareName || 'share').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 60)
       a.download = `${safe}.zip`
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
+      document.body.appendChild(a); a.click(); document.body.removeChild(a)
       URL.revokeObjectURL(url)
       setState('done')
       setTimeout(() => setState('idle'), 3000)
     } catch (err) {
-      setErrorMsg(err.message)
-      setState('error')
+      setErrorMsg(err.message); setState('error')
       setTimeout(() => setState('idle'), 4000)
     }
   }
 
-  const label = {
-    idle: `⬇ Download All (${assetCount})`,
+  const labels = {
+    idle: `Download All (${assetCount})`,
     downloading: 'Preparing ZIP…',
     done: '✓ Downloaded!',
     error: `✗ ${errorMsg}`,
-  }[state]
-
-  const btnClass = state === 'done'
-    ? 'btn btn-secondary btn-sm'
-    : state === 'error'
-      ? 'btn btn-danger btn-sm'
-      : 'btn btn-secondary btn-sm'
+  }
 
   return (
     <button
-      className={btnClass}
+      className={`btn btn-sm ${state === 'error' ? 'btn-danger' : 'btn-secondary'}`}
       onClick={handleDownload}
       disabled={state === 'downloading'}
-      title="Download all files as a ZIP archive"
-      style={{
-        display: 'flex', alignItems: 'center', gap: 6,
-        ...(state === 'downloading' ? { opacity: 0.75 } : {}),
-      }}
+      style={{ display: 'flex', alignItems: 'center', gap: 6 }}
     >
-      {state === 'downloading' && <span className="loading-spinner" style={{ width: 13, height: 13 }} />}
-      {label}
+      {state === 'downloading'
+        ? <span className="loading-spinner" style={{ width: 13, height: 13 }} />
+        : (
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+        )
+      }
+      {labels[state]}
     </button>
   )
 }
@@ -168,9 +175,7 @@ function UploadPanel({ shareId, sessionToken, onUploaded }) {
   const inputRef = useRef()
 
   function addFiles(incoming) {
-    const arr = Array.from(incoming).filter(f =>
-      f.type.startsWith('image/') || f.type.startsWith('video/')
-    )
+    const arr = Array.from(incoming).filter(f => f.type.startsWith('image/') || f.type.startsWith('video/'))
     setFiles(prev => {
       const existing = new Set(prev.map(f => f.name + f.size))
       return [...prev, ...arr.filter(f => !existing.has(f.name + f.size))]
@@ -178,16 +183,12 @@ function UploadPanel({ shareId, sessionToken, onUploaded }) {
     setResults([])
   }
 
-  function removeFile(idx) {
-    setFiles(prev => prev.filter((_, i) => i !== idx))
-  }
+  function removeFile(idx) { setFiles(prev => prev.filter((_, i) => i !== idx)) }
 
   async function uploadAll() {
     if (!files.length) return
-    setUploading(true)
-    setResults([])
+    setUploading(true); setResults([])
     const out = []
-
     for (const file of files) {
       try {
         const formData = new FormData()
@@ -196,31 +197,20 @@ function UploadPanel({ shareId, sessionToken, onUploaded }) {
         formData.append('deviceId', 'immich-share-upload')
         formData.append('fileCreatedAt', new Date(file.lastModified).toISOString())
         formData.append('fileModifiedAt', new Date(file.lastModified).toISOString())
-
-        const res = await fetch(
-          `/api/public/upload/${shareId}?t=${encodeURIComponent(sessionToken)}`,
-          { method: 'POST', body: formData }
-        )
+        const res = await fetch(`/api/public/upload/${shareId}?t=${encodeURIComponent(sessionToken)}`, {
+          method: 'POST', body: formData,
+        })
         const text = await res.text()
-        let data
-        try { data = JSON.parse(text) } catch { data = { error: text } }
-
-        if (res.ok && data.success) {
-          out.push({ name: file.name, ok: true })
-        } else {
-          out.push({ name: file.name, ok: false, error: data.error || 'Upload failed' })
-        }
+        let data; try { data = JSON.parse(text) } catch { data = { error: text } }
+        out.push(res.ok && data.success
+          ? { name: file.name, ok: true }
+          : { name: file.name, ok: false, error: data.error || 'Upload failed' })
       } catch (err) {
         out.push({ name: file.name, ok: false, error: err.message })
       }
     }
-
-    setResults(out)
-    setUploading(false)
-    if (out.some(r => r.ok)) {
-      setFiles([])
-      setTimeout(onUploaded, 800)
-    }
+    setResults(out); setUploading(false)
+    if (out.some(r => r.ok)) { setFiles([]); setTimeout(onUploaded, 800) }
   }
 
   const successCount = results.filter(r => r.ok).length
@@ -229,16 +219,19 @@ function UploadPanel({ shareId, sessionToken, onUploaded }) {
   return (
     <div style={{
       background: 'var(--bg2)',
-      border: '1px solid var(--border)',
+      border: '1.5px solid var(--border)',
       borderRadius: 'var(--radius)',
       padding: 20,
       marginBottom: 20,
     }}>
-      <h3 style={{ fontSize: '0.95rem', fontWeight: 600, marginBottom: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span>📤</span> Upload Photos & Videos
+      <h3 style={{ fontSize: '0.9rem', fontWeight: 700, marginBottom: 14, display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text)' }}>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+        </svg>
+        Upload Photos & Videos
       </h3>
 
-      {/* Drop zone */}
       <div
         onDragOver={e => { e.preventDefault(); setDragOver(true) }}
         onDragLeave={() => setDragOver(false)}
@@ -247,90 +240,79 @@ function UploadPanel({ shareId, sessionToken, onUploaded }) {
         style={{
           border: `2px dashed ${dragOver ? 'var(--accent)' : 'var(--border)'}`,
           borderRadius: 'var(--radius-sm)',
-          padding: '24px 16px',
+          padding: '28px 16px',
           textAlign: 'center',
           cursor: 'pointer',
-          background: dragOver ? 'var(--accent-glow)' : 'var(--bg3)',
+          background: dragOver ? 'var(--accent-dim)' : 'var(--bg3)',
           transition: 'all 0.15s',
           marginBottom: 12,
         }}
       >
-        <div style={{ fontSize: '1.8rem', marginBottom: 8 }}>🖼️</div>
-        <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>
-          Drop images/videos here or <span style={{ color: 'var(--accent)' }}>browse</span>
+        <div style={{ fontSize: '2rem', marginBottom: 8 }}>📷</div>
+        <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)', fontWeight: 500 }}>
+          Drop photos & videos or{' '}
+          <span style={{ color: 'var(--accent)', fontWeight: 700 }}>browse</span>
         </div>
-        <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginTop: 4 }}>
+        <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginTop: 5 }}>
           JPG, PNG, HEIC, MP4, MOV and more
         </div>
-        <input
-          ref={inputRef}
-          type="file"
-          multiple
-          accept="image/*,video/*"
-          style={{ display: 'none' }}
-          onChange={e => addFiles(e.target.files)}
-        />
+        <input ref={inputRef} type="file" multiple accept="image/*,video/*" style={{ display: 'none' }}
+          onChange={e => addFiles(e.target.files)} />
       </div>
 
-      {/* File queue */}
       {files.length > 0 && (
         <div style={{ marginBottom: 12 }}>
-          <div style={{ fontSize: '0.8rem', color: 'var(--text-dim)', marginBottom: 6 }}>
+          <div style={{ fontSize: '0.78rem', color: 'var(--text-dim)', marginBottom: 6, fontWeight: 600 }}>
             {files.length} file{files.length !== 1 ? 's' : ''} queued
           </div>
-          <div style={{ maxHeight: 140, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <div style={{ maxHeight: 130, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 3 }}>
             {files.map((f, i) => (
               <div key={i} style={{
                 display: 'flex', alignItems: 'center', gap: 8,
                 padding: '5px 10px',
                 background: 'var(--bg)',
-                borderRadius: 'var(--radius-sm)',
+                borderRadius: 'var(--radius-xs)',
+                border: '1px solid var(--border)',
                 fontSize: '0.8rem',
               }}>
                 <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {f.type.startsWith('video/') ? '🎬 ' : '🖼 '}{f.name}
+                  {f.type.startsWith('video/') ? '🎬 ' : '📷 '}{f.name}
                 </span>
-                <span style={{ color: 'var(--text-dim)', flexShrink: 0 }}>
+                <span style={{ color: 'var(--text-dim)', flexShrink: 0, fontSize: '0.75rem' }}>
                   {(f.size / 1024 / 1024).toFixed(1)} MB
                 </span>
-                <button
-                  onClick={e => { e.stopPropagation(); removeFile(i) }}
-                  style={{ background: 'none', color: 'var(--text-dim)', fontSize: '1rem', padding: '0 2px', border: 'none', cursor: 'pointer' }}
-                >✕</button>
+                <button onClick={e => { e.stopPropagation(); removeFile(i) }}
+                  style={{ background: 'none', color: 'var(--text-dim)', fontSize: '0.9rem', padding: '0 2px', border: 'none', cursor: 'pointer', lineHeight: 1 }}>✕</button>
               </div>
             ))}
           </div>
         </div>
       )}
 
-      {/* Results */}
       {results.length > 0 && (
         <div style={{ marginBottom: 12 }}>
           {successCount > 0 && (
             <div className="success-msg" style={{ marginBottom: 6 }}>
-              ✓ {successCount} file{successCount !== 1 ? 's' : ''} uploaded successfully
+              ✓ {successCount} file{successCount !== 1 ? 's' : ''} uploaded
             </div>
           )}
           {failCount > 0 && (
             <div className="error-msg">
-              {results.filter(r => !r.ok).map((r, i) => (
-                <div key={i}>✗ {r.name}: {r.error}</div>
-              ))}
+              {results.filter(r => !r.ok).map((r, i) => <div key={i}>✗ {r.name}: {r.error}</div>)}
             </div>
           )}
         </div>
       )}
 
       <button
-        className="btn btn-primary"
+        className="btn btn-primary btn-sm"
         onClick={uploadAll}
         disabled={uploading || files.length === 0}
       >
-        {uploading ? (
-          <><span className="loading-spinner" /> Uploading…</>
-        ) : (
-          `Upload ${files.length > 0 ? files.length + ' file' + (files.length !== 1 ? 's' : '') : ''}`
-        )}
+        {uploading
+          ? <><span className="loading-spinner" style={{ width: 13, height: 13 }} /> Uploading…</>
+          : `Upload${files.length > 0 ? ` ${files.length} file${files.length !== 1 ? 's' : ''}` : ''}`
+        }
       </button>
     </div>
   )
@@ -355,7 +337,7 @@ function LightBox({ asset, token, onClose, onPrev, onNext, total, index }) {
     <div
       style={{
         position: 'fixed', inset: 0,
-        background: 'rgba(0,0,0,0.96)',
+        background: 'rgba(6,8,16,0.97)',
         zIndex: 200,
         display: 'flex',
         flexDirection: 'column',
@@ -368,50 +350,82 @@ function LightBox({ asset, token, onClose, onPrev, onNext, total, index }) {
       <div style={{
         position: 'absolute', top: 0, left: 0, right: 0,
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '12px 16px',
-        background: 'linear-gradient(to bottom, rgba(0,0,0,0.7), transparent)',
+        padding: '12px 18px',
+        background: 'linear-gradient(to bottom, rgba(6,8,16,0.8), transparent)',
+        zIndex: 10,
       }}>
-        <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.8rem' }}>
-          {index + 1} / {total}
-        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div className="immich-mark" style={{ width: 28, height: 28, borderRadius: 7, fontSize: '0.85rem' }}>📷</div>
+          <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: '0.82rem', fontWeight: 600 }}>
+            {index + 1} / {total}
+          </span>
+        </div>
         <div style={{ display: 'flex', gap: 8 }}>
           {asset.originalUrl && (
             <a
               href={`${asset.originalUrl}?t=${t}`}
               download
               className="btn btn-secondary btn-sm"
-              style={{ color: '#fff', borderColor: 'rgba(255,255,255,0.2)' }}
+              style={{ color: 'rgba(255,255,255,0.8)', background: 'rgba(255,255,255,0.08)', borderColor: 'rgba(255,255,255,0.15)' }}
               onClick={e => e.stopPropagation()}
             >
-              ⬇ Download
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>
+              Download
             </a>
           )}
           <button
             onClick={onClose}
             style={{
-              background: 'rgba(255,255,255,0.1)',
-              color: '#fff', border: 'none', borderRadius: 6,
-              padding: '6px 12px', cursor: 'pointer', fontSize: '0.875rem',
+              background: 'rgba(255,255,255,0.08)',
+              color: 'rgba(255,255,255,0.8)',
+              border: '1px solid rgba(255,255,255,0.15)',
+              borderRadius: 7,
+              padding: '6px 13px',
+              cursor: 'pointer',
+              fontSize: '0.82rem',
+              fontFamily: 'inherit',
+              fontWeight: 600,
+              display: 'flex', alignItems: 'center', gap: 5,
             }}
-          >✕ Close</button>
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+            Close
+          </button>
         </div>
       </div>
 
-      {/* Prev / Next */}
+      {/* Nav arrows */}
       {total > 1 && (
         <>
-          <button onClick={onPrev} style={{
-            position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)',
-            background: 'rgba(255,255,255,0.1)', color: '#fff', border: 'none',
-            borderRadius: '50%', width: 48, height: 48, fontSize: '1.5rem',
-            cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>‹</button>
-          <button onClick={onNext} style={{
-            position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)',
-            background: 'rgba(255,255,255,0.1)', color: '#fff', border: 'none',
-            borderRadius: '50%', width: 48, height: 48, fontSize: '1.5rem',
-            cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>›</button>
+          {[
+            { onClick: onPrev, style: { left: 14 }, icon: '‹' },
+            { onClick: onNext, style: { right: 14 }, icon: '›' },
+          ].map(({ onClick, style: s, icon }) => (
+            <button key={icon} onClick={onClick} style={{
+              position: 'absolute', top: '50%', transform: 'translateY(-50%)',
+              background: 'rgba(255,255,255,0.08)',
+              backdropFilter: 'blur(8px)',
+              color: '#fff',
+              border: '1px solid rgba(255,255,255,0.12)',
+              borderRadius: '50%',
+              width: 48, height: 48,
+              fontSize: '1.6rem',
+              cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              lineHeight: 1,
+              fontFamily: 'inherit',
+              transition: 'background 0.15s',
+              ...s,
+            }}
+              onMouseEnter={e => e.currentTarget.style.background = 'rgba(212,168,67,0.2)'}
+              onMouseLeave={e => e.currentTarget.style.background = 'rgba(255,255,255,0.08)'}
+            >{icon}</button>
+          ))}
         </>
       )}
 
@@ -421,16 +435,15 @@ function LightBox({ asset, token, onClose, onPrev, onNext, total, index }) {
           <video
             key={asset.id}
             src={`${asset.videoUrl}?t=${t}`}
-            controls
-            autoPlay
-            style={{ maxWidth: '92vw', maxHeight: '82vh', borderRadius: 6, outline: 'none' }}
+            controls autoPlay
+            style={{ maxWidth: '92vw', maxHeight: '82vh', borderRadius: 8, outline: 'none' }}
           />
         ) : (
           <img
             key={asset.id}
             src={`${asset.previewUrl}?t=${t}`}
             alt={asset.originalFileName || ''}
-            style={{ maxWidth: '92vw', maxHeight: '82vh', borderRadius: 6, objectFit: 'contain', display: 'block' }}
+            style={{ maxWidth: '92vw', maxHeight: '82vh', borderRadius: 8, objectFit: 'contain', display: 'block' }}
           />
         )}
       </div>
@@ -439,11 +452,12 @@ function LightBox({ asset, token, onClose, onPrev, onNext, total, index }) {
       {(asset.originalFileName || asset.fileCreatedAt) && (
         <div style={{
           position: 'absolute', bottom: 0, left: 0, right: 0,
-          padding: '12px 20px',
-          background: 'linear-gradient(to top, rgba(0,0,0,0.7), transparent)',
-          color: 'rgba(255,255,255,0.55)',
+          padding: '14px 20px',
+          background: 'linear-gradient(to top, rgba(6,8,16,0.8), transparent)',
+          color: 'rgba(255,255,255,0.45)',
           fontSize: '0.78rem',
           display: 'flex', gap: 20,
+          fontWeight: 500,
         }}>
           {asset.originalFileName && <span>{asset.originalFileName}</span>}
           {asset.fileCreatedAt && (
@@ -468,7 +482,6 @@ export default function ShareView() {
   const [lightbox, setLightbox] = useState(null)
   const [showUpload, setShowUpload] = useState(false)
 
-  // Load public share info — works with both UUID and slug
   useEffect(() => {
     safeFetch(`/api/public/info/${shareId}`)
       .then(({ ok, data }) => {
@@ -480,10 +493,8 @@ export default function ShareView() {
   }, [shareId])
 
   const loadAssets = useCallback(async (sessionToken, shareUuid) => {
-    setAssetsLoading(true)
-    setAssetsError('')
+    setAssetsLoading(true); setAssetsError('')
     try {
-      // Content endpoint always uses UUID (from shareData.id), not slug
       const id = shareUuid || shareId
       const { ok, data } = await safeFetch(`/api/public/content/${id}`, {
         method: 'POST',
@@ -511,81 +522,91 @@ export default function ShareView() {
   const token = shareData?.sessionToken || ''
   const t = encodeURIComponent(token)
 
-  // ── Render states ───────────────────────────────────────────────────────────
-  if (infoLoading) {
-    return (
-      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <span className="loading-spinner" style={{ width: 32, height: 32 }} />
-      </div>
-    )
-  }
+  if (infoLoading) return (
+    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 16 }}>
+      <span className="loading-spinner" style={{ width: 32, height: 32 }} />
+      <span style={{ color: 'var(--text-dim)', fontSize: '0.875rem', fontWeight: 500 }}>Loading share…</span>
+    </div>
+  )
 
-  if (infoError || !shareInfo) {
-    return (
-      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
-        <div style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: '3rem', marginBottom: 12 }}>🔗</div>
-          <h1 style={{ marginBottom: 8 }}>Share Not Found</h1>
-          <p style={{ color: 'var(--text-muted)' }}>{infoError || 'This share link is invalid or has been removed.'}</p>
-        </div>
+  if (infoError || !shareInfo) return (
+    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+      <div style={{ textAlign: 'center', maxWidth: 360 }}>
+        <div style={{ fontSize: '3.5rem', marginBottom: 16 }}>🔗</div>
+        <h1 style={{ fontSize: '1.3rem', fontWeight: 800, marginBottom: 10 }}>Share Not Found</h1>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
+          {infoError || 'This share link is invalid or has been removed.'}
+        </p>
       </div>
-    )
-  }
+    </div>
+  )
 
-  if (shareInfo.isExpired || !shareInfo.isActive) {
-    return (
-      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
-        <div style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: '3rem', marginBottom: 12 }}>⏱</div>
-          <h1 style={{ marginBottom: 8 }}>{shareInfo.isExpired ? 'Share Expired' : 'Share Unavailable'}</h1>
-          <p style={{ color: 'var(--text-muted)' }}>This share link is no longer active.</p>
-        </div>
+  if (shareInfo.isExpired || !shareInfo.isActive) return (
+    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+      <div style={{ textAlign: 'center', maxWidth: 360 }}>
+        <div style={{ fontSize: '3.5rem', marginBottom: 16 }}>⏱</div>
+        <h1 style={{ fontSize: '1.3rem', fontWeight: 800, marginBottom: 10 }}>
+          {shareInfo.isExpired ? 'Share Expired' : 'Share Unavailable'}
+        </h1>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
+          This share link is no longer active.
+        </p>
       </div>
-    )
-  }
+    </div>
+  )
 
-  if (!shareData) {
-    return <PasswordGate shareInfo={shareInfo} onUnlock={handleUnlock} />
-  }
+  if (!shareData) return <PasswordGate shareInfo={shareInfo} onUnlock={handleUnlock} />
 
   return (
-    <div style={{ minHeight: '100vh', paddingBottom: 60 }}>
+    <div style={{ minHeight: '100vh', background: 'var(--bg)' }}>
       {/* Header */}
       <div style={{
-        padding: '16px 24px',
-        borderBottom: '1px solid var(--border)',
+        padding: '0 20px',
+        height: 58,
+        borderBottom: '1.5px solid var(--border)',
         background: 'var(--bg2)',
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        flexWrap: 'wrap', gap: 12, position: 'sticky', top: 0, zIndex: 10,
+        gap: 12, position: 'sticky', top: 0, zIndex: 10,
+        backdropFilter: 'blur(12px)',
       }}>
-        <div>
-          <h1 style={{ fontSize: '1.1rem', fontWeight: 600 }}>{shareData.name}</h1>
-          {shareData.description && (
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginTop: 2 }}>{shareData.description}</p>
-          )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+          <div className="immich-mark" style={{ width: 28, height: 28, borderRadius: 7, fontSize: '0.85rem', flexShrink: 0 }}>📷</div>
+          <div style={{ minWidth: 0 }}>
+            <div style={{
+              fontWeight: 800, fontSize: '0.9rem',
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}>{shareData.name}</div>
+            {shareData.description && (
+              <div style={{
+                color: 'var(--text-muted)', fontSize: '0.75rem', fontWeight: 500,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>{shareData.description}</div>
+            )}
+          </div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          <span style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, flexWrap: 'wrap' }}>
+          <span style={{ color: 'var(--text-dim)', fontSize: '0.78rem', fontWeight: 600 }}>
             {assets.length} {assets.length === 1 ? 'item' : 'items'}
           </span>
           {shareData.allow_download && assets.length > 0 && (
-            <>
-              <span className="badge badge-green">⬇ Downloads on</span>
-              <DownloadZipButton
-                shareId={shareData.id}
-                sessionToken={token}
-                assetCount={assets.length}
-                shareName={shareData.name}
-              />
-            </>
+            <DownloadZipButton
+              shareId={shareData.id}
+              sessionToken={token}
+              assetCount={assets.length}
+              shareName={shareData.name}
+            />
           )}
           {shareData.allow_upload && (
             <button
               className="btn btn-secondary btn-sm"
               onClick={() => setShowUpload(v => !v)}
-              style={{ display: 'flex', alignItems: 'center', gap: 6 }}
             >
-              📤 {showUpload ? 'Hide Upload' : 'Upload'}
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+              </svg>
+              {showUpload ? 'Hide Upload' : 'Upload'}
             </button>
           )}
         </div>
@@ -593,37 +614,35 @@ export default function ShareView() {
 
       {/* Upload panel */}
       {shareData.allow_upload && showUpload && (
-        <div style={{ maxWidth: 640, margin: '20px auto 0', padding: '0 16px' }}>
-          <UploadPanel
-            shareId={shareId}
-            sessionToken={token}
-            onUploaded={handleUploaded}
-          />
+        <div style={{ maxWidth: 620, margin: '20px auto 0', padding: '0 16px' }}>
+          <UploadPanel shareId={shareId} sessionToken={token} onUploaded={handleUploaded} />
         </div>
       )}
 
       {/* Gallery */}
       {assetsLoading ? (
-        <div style={{ display: 'flex', justifyContent: 'center', padding: '80px 0' }}>
-          <span className="loading-spinner" style={{ width: 32, height: 32 }} />
+        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '100px 0', gap: 14, color: 'var(--text-dim)' }}>
+          <span className="loading-spinner" style={{ width: 30, height: 30 }} />
+          <span style={{ fontSize: '0.9rem', fontWeight: 500 }}>Loading photos…</span>
         </div>
       ) : assetsError ? (
-        <div style={{ maxWidth: 480, margin: '60px auto', padding: '0 20px' }}>
+        <div style={{ maxWidth: 460, margin: '60px auto', padding: '0 20px' }}>
           <div className="error-msg">{assetsError}</div>
         </div>
       ) : assets.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '80px 20px', color: 'var(--text-muted)' }}>
-          {shareData.allow_upload
-            ? 'No photos yet — be the first to upload!'
-            : 'No photos found in this share.'}
+        <div style={{ textAlign: 'center', padding: '100px 20px', color: 'var(--text-muted)' }}>
+          <div style={{ fontSize: '3rem', marginBottom: 14 }}>📷</div>
+          <div style={{ fontWeight: 700, fontSize: '1rem' }}>
+            {shareData.allow_upload ? 'No photos yet — be the first to upload!' : 'No photos in this share.'}
+          </div>
         </div>
       ) : (
         <div style={{
-          padding: '16px',
+          padding: '4px',
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
-          gap: 4,
-          maxWidth: 1600, margin: '0 auto',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))',
+          gap: 3,
+          maxWidth: '100%',
         }}>
           {assets.map((asset, i) => (
             <div
@@ -631,11 +650,11 @@ export default function ShareView() {
               onClick={() => setLightbox(i)}
               style={{
                 aspectRatio: '1',
-                borderRadius: 4,
                 overflow: 'hidden',
                 cursor: 'pointer',
                 background: 'var(--bg3)',
                 position: 'relative',
+                borderRadius: 3,
               }}
             >
               <img
@@ -644,20 +663,23 @@ export default function ShareView() {
                 alt=""
                 style={{
                   width: '100%', height: '100%', objectFit: 'cover',
-                  transition: 'transform 0.2s, opacity 0.2s',
+                  transition: 'transform 0.25s ease, opacity 0.3s',
                   opacity: 0,
+                  display: 'block',
                 }}
                 onLoad={e => { e.target.style.opacity = 1 }}
-                onMouseEnter={e => e.target.style.transform = 'scale(1.05)'}
+                onMouseEnter={e => e.target.style.transform = 'scale(1.06)'}
                 onMouseLeave={e => e.target.style.transform = 'scale(1)'}
               />
               {asset.type === 'VIDEO' && (
                 <div style={{
-                  position: 'absolute', bottom: 6, right: 6,
-                  background: 'rgba(0,0,0,0.65)',
-                  borderRadius: 4, padding: '2px 7px',
+                  position: 'absolute', bottom: 7, right: 7,
+                  background: 'rgba(0,0,0,0.7)',
+                  backdropFilter: 'blur(4px)',
+                  borderRadius: 5, padding: '2px 8px',
                   fontSize: '0.7rem', color: '#fff',
                   display: 'flex', alignItems: 'center', gap: 4,
+                  fontWeight: 600,
                 }}>▶ {asset.duration || 'video'}</div>
               )}
             </div>
@@ -665,7 +687,6 @@ export default function ShareView() {
         </div>
       )}
 
-      {/* Lightbox */}
       {lightbox !== null && (
         <LightBox
           asset={assets[lightbox]}
@@ -678,7 +699,7 @@ export default function ShareView() {
         />
       )}
 
-      <div style={{ textAlign: 'center', marginTop: 40, color: 'var(--text-dim)', fontSize: '0.75rem' }}>
+      <div style={{ textAlign: 'center', padding: '32px 20px 40px', color: 'var(--text-dim)', fontSize: '0.75rem', fontWeight: 500 }}>
         Shared via {shareInfo.appName}
       </div>
     </div>
