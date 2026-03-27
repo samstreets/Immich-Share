@@ -114,12 +114,25 @@ function LogsModal({ share, onClose }) {
   )
 }
 
+// ── Slug preview helper ───────────────────────────────────────────────────────
+function SlugPreview({ slug, externalUrl }) {
+  if (!slug) return null
+  const clean = slug.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')
+  if (!clean) return null
+  return (
+    <span style={{ fontSize: '0.78rem', color: 'var(--accent)', fontFamily: 'monospace', marginTop: 4, display: 'block' }}>
+      {externalUrl || 'https://your-domain.com'}/s/{clean}
+    </span>
+  )
+}
+
 // ── Share Create/Edit Modal ───────────────────────────────────────────────────
 function ShareModal({ onClose, onSaved, editShare }) {
   const api = useApi()
   const [albums, setAlbums] = useState([])
   const [tags, setTags] = useState([])
   const [sourceLoading, setSourceLoading] = useState(false)
+  const [externalUrl, setExternalUrl] = useState('')
   const [form, setForm] = useState({
     name: editShare?.name || '',
     description: editShare?.description || '',
@@ -131,6 +144,7 @@ function ShareModal({ onClose, onSaved, editShare }) {
     allow_download: editShare?.allow_download !== false,
     allow_upload: editShare?.allow_upload || false,
     show_metadata: editShare?.show_metadata || false,
+    slug: editShare?.slug || '',
   })
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
@@ -140,9 +154,11 @@ function ShareModal({ onClose, onSaved, editShare }) {
     Promise.all([
       api('/admin/immich/albums').catch(() => []),
       api('/admin/immich/tags').catch(() => []),
-    ]).then(([a, t]) => {
+      api('/admin/settings').catch(() => ({})),
+    ]).then(([a, t, s]) => {
       setAlbums(Array.isArray(a) ? a : [])
       setTags(Array.isArray(t) ? t : [])
+      setExternalUrl((s?.external_url || '').replace(/\/$/, ''))
     }).finally(() => setSourceLoading(false))
   }, [])
 
@@ -166,6 +182,7 @@ function ShareModal({ onClose, onSaved, editShare }) {
             allow_download: form.allow_download,
             allow_upload: form.allow_upload,
             show_metadata: form.show_metadata,
+            slug: form.slug,
           },
         })
       } else {
@@ -183,6 +200,7 @@ function ShareModal({ onClose, onSaved, editShare }) {
             allow_download: form.allow_download,
             allow_upload: form.allow_upload,
             show_metadata: form.show_metadata,
+            slug: form.slug || undefined,
           },
         })
       }
@@ -221,6 +239,40 @@ function ShareModal({ onClose, onSaved, editShare }) {
                 onChange={e => set('description', e.target.value)}
                 placeholder="Optional description shown to viewers"
               />
+            </div>
+
+            {/* Custom slug */}
+            <div className="form-group">
+              <label>
+                Custom URL Slug
+                <span style={{
+                  marginLeft: 8, padding: '2px 6px', borderRadius: 4,
+                  fontSize: '0.7rem', background: 'var(--accent-glow)', color: 'var(--accent)',
+                  fontWeight: 500,
+                }}>optional</span>
+              </label>
+              <div style={{ position: 'relative' }}>
+                <span style={{
+                  position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)',
+                  color: 'var(--text-dim)', fontSize: '0.85rem', pointerEvents: 'none',
+                  userSelect: 'none',
+                }}>
+                  /s/
+                </span>
+                <input
+                  value={form.slug}
+                  onChange={e => set('slug', e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
+                  placeholder="my-summer-trip"
+                  style={{ paddingLeft: 36 }}
+                  minLength={3}
+                  maxLength={60}
+                  pattern="[a-z0-9][a-z0-9-]*"
+                />
+              </div>
+              <SlugPreview slug={form.slug} externalUrl={externalUrl} />
+              <span className="hint">
+                3–60 chars, lowercase letters, numbers and hyphens only. Leave blank to use the auto-generated ID.
+              </span>
             </div>
 
             {!editShare && (
@@ -443,6 +495,14 @@ export default function SharesPage() {
                     {share.isExpired && share.is_active && <span className="badge badge-red">Expired</span>}
                     {share.is_active && !share.isExpired && <span className="badge badge-green">Active</span>}
                     <span className="badge badge-purple">{share.share_type}</span>
+                    {share.slug && (
+                      <span className="badge" style={{
+                        background: 'rgba(96,165,250,0.12)', color: '#60a5fa',
+                        fontFamily: 'monospace', fontSize: '0.7rem',
+                      }}>
+                        /s/{share.slug}
+                      </span>
+                    )}
                     {share.allow_upload === 1 && <span className="badge badge-purple">📤 uploads</span>}
                   </div>
                   {share.description && (

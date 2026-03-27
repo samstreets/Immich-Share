@@ -14,11 +14,32 @@ function getExternalUrl(db) {
   return (row?.value || '').replace(/\/$/, '');
 }
 
+/**
+ * Validate a custom slug: lowercase alphanumeric + hyphens, 3-60 chars.
+ * Returns cleaned slug or throws.
+ */
+function cleanSlug(raw) {
+  const s = raw.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+  if (s.length < 3) throw new Error('Slug must be at least 3 characters');
+  if (s.length > 60) throw new Error('Slug must be 60 characters or fewer');
+  if (!/^[a-z0-9]/.test(s)) throw new Error('Slug must start with a letter or number');
+  // Reserve admin paths
+  const reserved = ['admin', 'api', 's', 'login', 'share', 'shares'];
+  if (reserved.includes(s)) throw new Error(`"${s}" is a reserved slug`);
+  return s;
+}
+
+function shareUrl(externalUrl, share) {
+  // Prefer slug-based URL if slug is set
+  if (share.slug) return `${externalUrl}/s/${share.slug}`;
+  return `${externalUrl}/s/${share.id}`;
+}
+
 // List all shares
 router.get('/', (req, res) => {
   const db = getDb();
   const shares = db.prepare(`
-    SELECT id, name, description, share_type, immich_album_id, immich_tag_id,
+    SELECT id, slug, name, description, share_type, immich_album_id, immich_tag_id,
            expires_at, allow_download, allow_upload, show_metadata, view_count,
            created_at, updated_at, is_active
     FROM shares ORDER BY created_at DESC
@@ -28,7 +49,7 @@ router.get('/', (req, res) => {
 
   const sharesWithLinks = shares.map(s => ({
     ...s,
-    shareUrl: `${externalUrl}/s/${s.id}`,
+    shareUrl: shareUrl(externalUrl, s),
     isExpired: s.expires_at ? new Date(s.expires_at) < new Date() : false,
   }));
 
@@ -45,7 +66,7 @@ router.get('/:id', (req, res) => {
 
   res.json({
     ...share,
-    shareUrl: `${externalUrl}/s/${share.id}`,
+    shareUrl: shareUrl(externalUrl, share),
     password_hash: undefined,
   });
 });
@@ -63,6 +84,7 @@ router.post('/', async (req, res) => {
     allow_download,
     allow_upload,
     show_metadata,
+    slug: rawSlug,
   } = req.body;
 
   if (!name || !password) {
@@ -78,27 +100,48 @@ router.post('/', async (req, res) => {
     return res.status(400).json({ error: 'immich_tag_id required for tag shares' });
   }
 
+  let slug = null;
+  if (rawSlug && rawSlug.trim()) {
+    try {
+      slug = cleanSlug(rawSlug);
+    } catch (err) {
+      return res.status(400).json({ error: err.message });
+    }
+    // Check uniqueness
+    const db2 = getDb();
+    const existing = db2.prepare('SELECT id FROM shares WHERE slug = ?').get(slug);
+    if (existing) return res.status(409).json({ error: `Slug "${slug}" is already taken` });
+  }
+
   const id = uuidv4();
   const passwordHash = await bcrypt.hash(password, 10);
   const db = getDb();
 
-  db.prepare(`
-    INSERT INTO shares (id, name, description, share_type, immich_album_id, immich_tag_id,
-      password_hash, expires_at, allow_download, allow_upload, show_metadata)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    id, name, description || null, share_type,
-    immich_album_id || null,
-    immich_tag_id || null,
-    passwordHash,
-    expires_at || null,
-    allow_download !== false ? 1 : 0,
-    allow_upload ? 1 : 0,
-    show_metadata ? 1 : 0
-  );
+  try {
+    db.prepare(`
+      INSERT INTO shares (id, slug, name, description, share_type, immich_album_id, immich_tag_id,
+        password_hash, expires_at, allow_download, allow_upload, show_metadata)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id, slug, name, description || null, share_type,
+      immich_album_id || null,
+      immich_tag_id || null,
+      passwordHash,
+      expires_at || null,
+      allow_download !== false ? 1 : 0,
+      allow_upload ? 1 : 0,
+      show_metadata ? 1 : 0
+    );
+  } catch (err) {
+    if (err.message.includes('UNIQUE constraint failed: shares.slug')) {
+      return res.status(409).json({ error: `Slug "${slug}" is already taken` });
+    }
+    throw err;
+  }
 
   const externalUrl = getExternalUrl(db);
-  res.status(201).json({ id, shareUrl: `${externalUrl}/s/${id}` });
+  const newShare = { id, slug };
+  res.status(201).json({ id, slug, shareUrl: shareUrl(externalUrl, newShare) });
 });
 
 // Update share
@@ -107,11 +150,32 @@ router.patch('/:id', async (req, res) => {
   const share = db.prepare('SELECT * FROM shares WHERE id = ?').get(req.params.id);
   if (!share) return res.status(404).json({ error: 'Share not found' });
 
-  const { name, description, password, expires_at, allow_download, allow_upload, show_metadata, is_active } = req.body;
+  const {
+    name, description, password, expires_at,
+    allow_download, allow_upload, show_metadata, is_active,
+    slug: rawSlug,
+  } = req.body;
 
   let passwordHash = share.password_hash;
   if (password) {
     passwordHash = await bcrypt.hash(password, 10);
+  }
+
+  // Handle slug update
+  let slug = share.slug;
+  if (rawSlug !== undefined) {
+    if (!rawSlug || !rawSlug.trim()) {
+      slug = null; // clear the slug
+    } else {
+      try {
+        slug = cleanSlug(rawSlug);
+      } catch (err) {
+        return res.status(400).json({ error: err.message });
+      }
+      // Check uniqueness (excluding self)
+      const existing = db.prepare('SELECT id FROM shares WHERE slug = ? AND id != ?').get(slug, req.params.id);
+      if (existing) return res.status(409).json({ error: `Slug "${slug}" is already taken` });
+    }
   }
 
   const updatedName        = name !== undefined ? name : share.name;
@@ -122,23 +186,31 @@ router.patch('/:id', async (req, res) => {
   const updatedMetadata    = show_metadata !== undefined ? (show_metadata ? 1 : 0) : share.show_metadata;
   const updatedActive      = is_active !== undefined ? (is_active ? 1 : 0) : share.is_active;
 
-  db.prepare(`
-    UPDATE shares SET
-      name = ?,
-      description = ?,
-      password_hash = ?,
-      expires_at = ?,
-      allow_download = ?,
-      allow_upload = ?,
-      show_metadata = ?,
-      is_active = ?,
-      updated_at = CURRENT_TIMESTAMP
-    WHERE id = ?
-  `).run(
-    updatedName, updatedDescription, passwordHash,
-    updatedExpiresAt, updatedDownload, updatedUpload, updatedMetadata, updatedActive,
-    req.params.id
-  );
+  try {
+    db.prepare(`
+      UPDATE shares SET
+        slug = ?,
+        name = ?,
+        description = ?,
+        password_hash = ?,
+        expires_at = ?,
+        allow_download = ?,
+        allow_upload = ?,
+        show_metadata = ?,
+        is_active = ?,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(
+      slug, updatedName, updatedDescription, passwordHash,
+      updatedExpiresAt, updatedDownload, updatedUpload, updatedMetadata, updatedActive,
+      req.params.id
+    );
+  } catch (err) {
+    if (err.message.includes('UNIQUE constraint failed: shares.slug')) {
+      return res.status(409).json({ error: `Slug "${slug}" is already taken` });
+    }
+    throw err;
+  }
 
   res.json({ message: 'Share updated' });
 });

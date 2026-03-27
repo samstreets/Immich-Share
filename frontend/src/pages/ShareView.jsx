@@ -94,6 +94,71 @@ function PasswordGate({ shareInfo, onUnlock }) {
   )
 }
 
+// ── Download ZIP button ───────────────────────────────────────────────────────
+function DownloadZipButton({ shareId, sessionToken, assetCount, shareName }) {
+  const [state, setState] = useState('idle') // idle | downloading | done | error
+  const [errorMsg, setErrorMsg] = useState('')
+
+  async function handleDownload() {
+    setState('downloading')
+    setErrorMsg('')
+    try {
+      const t = encodeURIComponent(sessionToken)
+      const res = await fetch(`/api/public/zip/${shareId}?t=${t}`)
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || `HTTP ${res.status}`)
+      }
+      // Stream into a blob then trigger download
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      const safe = (shareName || 'share').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 60)
+      a.download = `${safe}.zip`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+      setState('done')
+      setTimeout(() => setState('idle'), 3000)
+    } catch (err) {
+      setErrorMsg(err.message)
+      setState('error')
+      setTimeout(() => setState('idle'), 4000)
+    }
+  }
+
+  const label = {
+    idle: `⬇ Download All (${assetCount})`,
+    downloading: 'Preparing ZIP…',
+    done: '✓ Downloaded!',
+    error: `✗ ${errorMsg}`,
+  }[state]
+
+  const btnClass = state === 'done'
+    ? 'btn btn-secondary btn-sm'
+    : state === 'error'
+      ? 'btn btn-danger btn-sm'
+      : 'btn btn-secondary btn-sm'
+
+  return (
+    <button
+      className={btnClass}
+      onClick={handleDownload}
+      disabled={state === 'downloading'}
+      title="Download all files as a ZIP archive"
+      style={{
+        display: 'flex', alignItems: 'center', gap: 6,
+        ...(state === 'downloading' ? { opacity: 0.75 } : {}),
+      }}
+    >
+      {state === 'downloading' && <span className="loading-spinner" style={{ width: 13, height: 13 }} />}
+      {label}
+    </button>
+  )
+}
+
 // ── Upload Panel ──────────────────────────────────────────────────────────────
 function UploadPanel({ shareId, sessionToken, onUploaded }) {
   const [files, setFiles] = useState([])
@@ -131,9 +196,6 @@ function UploadPanel({ shareId, sessionToken, onUploaded }) {
         formData.append('deviceId', 'immich-share-upload')
         formData.append('fileCreatedAt', new Date(file.lastModified).toISOString())
         formData.append('fileModifiedAt', new Date(file.lastModified).toISOString())
-        // NOTE: token goes in the query string, NOT the form body.
-        // The upload route streams req directly to Immich without parsing
-        // the body, so anything appended to FormData would be lost.
 
         const res = await fetch(
           `/api/public/upload/${shareId}?t=${encodeURIComponent(sessionToken)}`,
@@ -406,7 +468,7 @@ export default function ShareView() {
   const [lightbox, setLightbox] = useState(null)
   const [showUpload, setShowUpload] = useState(false)
 
-  // Load public share info
+  // Load public share info — works with both UUID and slug
   useEffect(() => {
     safeFetch(`/api/public/info/${shareId}`)
       .then(({ ok, data }) => {
@@ -417,11 +479,13 @@ export default function ShareView() {
       .finally(() => setInfoLoading(false))
   }, [shareId])
 
-  const loadAssets = useCallback(async (sessionToken) => {
+  const loadAssets = useCallback(async (sessionToken, shareUuid) => {
     setAssetsLoading(true)
     setAssetsError('')
     try {
-      const { ok, data } = await safeFetch(`/api/public/content/${shareId}`, {
+      // Content endpoint always uses UUID (from shareData.id), not slug
+      const id = shareUuid || shareId
+      const { ok, data } = await safeFetch(`/api/public/content/${id}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionToken }),
@@ -437,11 +501,11 @@ export default function ShareView() {
 
   const handleUnlock = useCallback(async (data) => {
     setShareData(data)
-    await loadAssets(data.sessionToken)
+    await loadAssets(data.sessionToken, data.id)
   }, [loadAssets])
 
   const handleUploaded = useCallback(() => {
-    if (shareData?.sessionToken) loadAssets(shareData.sessionToken)
+    if (shareData?.sessionToken) loadAssets(shareData.sessionToken, shareData.id)
   }, [shareData, loadAssets])
 
   const token = shareData?.sessionToken || ''
@@ -500,12 +564,20 @@ export default function ShareView() {
             <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginTop: 2 }}>{shareData.description}</p>
           )}
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <span style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>
             {assets.length} {assets.length === 1 ? 'item' : 'items'}
           </span>
           {shareData.allow_download && assets.length > 0 && (
-            <span className="badge badge-green">⬇ Downloads on</span>
+            <>
+              <span className="badge badge-green">⬇ Downloads on</span>
+              <DownloadZipButton
+                shareId={shareData.id}
+                sessionToken={token}
+                assetCount={assets.length}
+                shareName={shareData.name}
+              />
+            </>
           )}
           {shareData.allow_upload && (
             <button

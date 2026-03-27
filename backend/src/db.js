@@ -46,6 +46,7 @@ function initDb() {
   db.exec(`
     CREATE TABLE IF NOT EXISTS shares (
       id TEXT PRIMARY KEY,
+      slug TEXT UNIQUE,
       name TEXT NOT NULL,
       description TEXT,
       immich_album_id TEXT,
@@ -71,8 +72,11 @@ function initDb() {
   if (!cols.includes('allow_upload')) {
     db.exec(`ALTER TABLE shares ADD COLUMN allow_upload INTEGER DEFAULT 0`);
   }
+  if (!cols.includes('slug')) {
+    db.exec(`ALTER TABLE shares ADD COLUMN slug TEXT UNIQUE`);
+  }
 
-  // Share access logs — with action column
+  // Share access logs
   db.exec(`
     CREATE TABLE IF NOT EXISTS access_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -86,7 +90,7 @@ function initDb() {
     )
   `);
 
-  // Migrate access_logs: add columns if missing
+  // Migrate access_logs
   const logCols = db.prepare("PRAGMA table_info(access_logs)").all().map(c => c.name);
   if (!logCols.includes('action')) {
     db.exec(`ALTER TABLE access_logs ADD COLUMN action TEXT DEFAULT 'view'`);
@@ -111,7 +115,6 @@ function initDb() {
     immich_api_key: process.env.IMMICH_API_KEY || '',
     external_url: process.env.EXTERNAL_URL || `http://localhost:${process.env.PORT || 3000}`,
     app_name: 'Immich Share',
-    // Newline-separated list of allowed CORS origins (empty = allow all)
     allowed_origins: process.env.ALLOWED_ORIGINS || '',
   };
 
