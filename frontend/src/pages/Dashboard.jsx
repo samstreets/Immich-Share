@@ -8,28 +8,27 @@ function StatCard({ icon, label, value, sub, accent }) {
       background: 'var(--bg2)',
       border: '1px solid var(--border)',
       borderRadius: 'var(--radius)',
-      padding: '20px',
+      padding: '16px',
       display: 'flex',
-      flexDirection: 'column',
-      gap: 10,
+      alignItems: 'center',
+      gap: 14,
       transition: 'border-color 0.15s, background 0.15s',
-      cursor: 'default',
     }}
       onMouseEnter={e => { e.currentTarget.style.background = 'var(--bg3)'; e.currentTarget.style.borderColor = 'var(--border-light)' }}
       onMouseLeave={e => { e.currentTarget.style.background = 'var(--bg2)'; e.currentTarget.style.borderColor = 'var(--border)' }}
     >
       <div style={{
-        width: 40, height: 40,
+        width: 44, height: 44, flexShrink: 0,
         borderRadius: 10,
         background: `${accent}14`,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        fontSize: '1.1rem',
+        fontSize: '1.2rem',
       }}>
         {icon}
       </div>
-      <div>
+      <div style={{ minWidth: 0 }}>
         <div style={{
-          fontSize: '1.6rem',
+          fontSize: '1.5rem',
           fontWeight: 800,
           letterSpacing: '-0.03em',
           lineHeight: 1,
@@ -37,16 +36,11 @@ function StatCard({ icon, label, value, sub, accent }) {
         }}>
           {value ?? '—'}
         </div>
-        <div style={{
-          fontSize: '0.78rem',
-          color: 'var(--text-muted)',
-          marginTop: 5,
-          fontWeight: 500,
-        }}>
+        <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)', marginTop: 4, fontWeight: 500 }}>
           {label}
         </div>
         {sub && (
-          <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)', marginTop: 2 }}>
+          <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', marginTop: 1 }}>
             {sub}
           </div>
         )}
@@ -69,23 +63,14 @@ function ConnectionBadge({ status }) {
       <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         {ok && (
           <div style={{
-            position: 'absolute',
-            width: 14, height: 14, borderRadius: '50%',
-            background: 'var(--green)',
-            opacity: 0.2,
+            position: 'absolute', width: 14, height: 14, borderRadius: '50%',
+            background: 'var(--green)', opacity: 0.2,
             animation: 'ping 2s cubic-bezier(0,0,0.2,1) infinite',
           }} />
         )}
-        <div style={{
-          width: 7, height: 7, borderRadius: '50%',
-          background: ok ? 'var(--green)' : 'var(--red)',
-        }} />
+        <div style={{ width: 7, height: 7, borderRadius: '50%', background: ok ? 'var(--green)' : 'var(--red)' }} />
       </div>
-      <span style={{
-        fontSize: '0.78rem',
-        fontWeight: 600,
-        color: ok ? 'var(--green)' : 'var(--red)',
-      }}>
+      <span style={{ fontSize: '0.78rem', fontWeight: 600, color: ok ? 'var(--green)' : 'var(--red)' }}>
         {ok ? 'Connected' : status?.error || 'Disconnected'}
       </span>
       <style>{`@keyframes ping { 75%,100% { transform:scale(2.2); opacity:0; } }`}</style>
@@ -119,30 +104,38 @@ export default function Dashboard() {
 
   return (
     <div>
-      {/* Page title — matches Immich's "Utilities" header style */}
-      <div style={{ marginBottom: 24 }}>
-        <h1 style={{
-          fontSize: '1.25rem',
-          fontWeight: 700,
-          color: 'var(--text)',
-          letterSpacing: '-0.01em',
-        }}>
+      <style>{`
+        .dash-stats-grid {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 10px;
+          margin-bottom: 20px;
+        }
+        @media (min-width: 900px) {
+          .dash-stats-grid {
+            grid-template-columns: repeat(4, 1fr);
+          }
+        }
+      `}</style>
+
+      <div style={{ marginBottom: 20 }}>
+        <h1 style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--text)', letterSpacing: '-0.01em' }}>
           Dashboard
         </h1>
       </div>
 
-      {/* Immich connection status — matches the subtle info card style */}
+      {/* Immich connection card */}
       <div style={{
         background: 'var(--bg2)',
         border: '1px solid var(--border)',
         borderRadius: 'var(--radius)',
-        padding: '14px 18px',
-        marginBottom: 16,
+        padding: '12px 16px',
+        marginBottom: 14,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
         flexWrap: 'wrap',
-        gap: 12,
+        gap: 10,
       }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <div style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text)' }}>
@@ -162,12 +155,7 @@ export default function Dashboard() {
           <span style={{ fontSize: '0.82rem' }}>Loading…</span>
         </div>
       ) : (
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
-          gap: 12,
-          marginBottom: 24,
-        }}>
+        <div className="dash-stats-grid">
           <StatCard icon="🔗" label="Total Shares"  value={stats?.totalShares ?? 0}  accent="#c4a44a" />
           <StatCard icon="✅" label="Active"         value={stats?.activeShares ?? 0}  accent="#4ade80" />
           <StatCard icon="⌛" label="Expired"        value={stats?.expiredShares ?? 0} accent="#fbbf24" />
@@ -175,13 +163,13 @@ export default function Dashboard() {
             icon="👁"
             label="Total Views"
             value={stats?.totalViews ?? 0}
-            sub={`${stats?.recentViews ?? 0} in last 7 days`}
+            sub={`${stats?.recentViews ?? 0} last 7d`}
             accent="#60a5fa"
           />
         </div>
       )}
 
-      {/* Quick actions — matches Immich's "Organize your library" card style */}
+      {/* Quick actions */}
       <div style={{
         background: 'var(--bg2)',
         border: '1px solid var(--border)',
@@ -189,9 +177,9 @@ export default function Dashboard() {
         overflow: 'hidden',
       }}>
         <div style={{
-          padding: '14px 18px',
+          padding: '12px 16px',
           borderBottom: '1px solid var(--border)',
-          fontSize: '0.75rem',
+          fontSize: '0.7rem',
           fontWeight: 700,
           color: 'var(--text-muted)',
           letterSpacing: '0.06em',
@@ -200,36 +188,20 @@ export default function Dashboard() {
           Quick Actions
         </div>
 
-        {/* Action list rows — like Immich's utility links */}
         {[
           {
             to: '/admin/shares',
-            icon: (
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-              </svg>
-            ),
+            icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>,
             label: 'Create new share',
           },
           {
             to: '/admin/shares',
-            icon: (
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/>
-                <polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/>
-              </svg>
-            ),
+            icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>,
             label: 'Manage shares',
           },
           {
             to: '/admin/logs',
-            icon: (
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                <polyline points="14 2 14 8 20 8"/>
-                <line x1="16" y1="13" x2="8" y2="13"/>
-              </svg>
-            ),
+            icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/></svg>,
             label: 'View activity logs',
           },
         ].map(({ to, icon, label }) => (
@@ -240,7 +212,7 @@ export default function Dashboard() {
               display: 'flex',
               alignItems: 'center',
               gap: 14,
-              padding: '13px 18px',
+              padding: '13px 16px',
               color: 'var(--text)',
               textDecoration: 'none',
               borderBottom: '1px solid var(--border)',
@@ -258,8 +230,7 @@ export default function Dashboard() {
             <span style={{ marginLeft: 'auto', color: 'var(--text-dim)', fontSize: '0.75rem' }}>→</span>
           </Link>
         ))}
-
-        <div style={{ height: 1 }} /> {/* remove bottom border on last item */}
+        <div style={{ height: 1 }} />
       </div>
     </div>
   )
