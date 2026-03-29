@@ -44,53 +44,39 @@ export default function LoginPage() {
 
   return (
     <div style={{
-      minHeight: '100vh',
+      minHeight: '100dvh',
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
       background: 'var(--bg)',
-      padding: '24px',
+      padding: '24px 16px',
       position: 'relative',
       overflow: 'hidden',
     }}>
-      {/* Subtle background glow — Immich uses very dark, minimal bg */}
+      {/* Subtle background glow */}
       <div style={{
         position: 'absolute',
-        width: '500px',
-        height: '500px',
+        width: '500px', height: '500px',
         borderRadius: '50%',
         background: 'radial-gradient(circle, rgba(33,150,243,0.04) 0%, transparent 70%)',
-        top: '50%',
-        left: '50%',
+        top: '50%', left: '50%',
         transform: 'translate(-50%, -50%)',
         pointerEvents: 'none',
       }} />
 
-      <div style={{
-        width: '100%',
-        maxWidth: '360px',
-        position: 'relative',
-        zIndex: 1,
-      }}>
+      <div style={{ width: '100%', maxWidth: '360px', position: 'relative', zIndex: 1 }}>
         {/* Logo + name */}
         <div style={{ textAlign: 'center', marginBottom: 32 }}>
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
             <ImmichLogo size={40} />
             <span style={{
-              fontSize: '1.6rem',
-              fontWeight: 800,
-              letterSpacing: '-0.03em',
-              color: 'var(--text)',
+              fontSize: '1.6rem', fontWeight: 800,
+              letterSpacing: '-0.03em', color: 'var(--text)',
             }}>
               immich share
             </span>
           </div>
-          <p style={{
-            color: 'var(--text-dim)',
-            fontSize: '0.82rem',
-            fontWeight: 500,
-            marginTop: 4,
-          }}>
+          <p style={{ color: 'var(--text-dim)', fontSize: '0.82rem', fontWeight: 500, marginTop: 4 }}>
             Admin Dashboard
           </p>
         </div>
@@ -103,26 +89,39 @@ export default function LoginPage() {
           padding: '28px 24px',
           boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
         }}>
-          <h1 style={{
-            fontSize: '1rem',
-            fontWeight: 700,
-            marginBottom: 20,
-            color: 'var(--text)',
-          }}>
+          <h1 style={{ fontSize: '1rem', fontWeight: 700, marginBottom: 20, color: 'var(--text)' }}>
             Sign in
           </h1>
 
           {error && (
-            <div className="error-msg">
-              {error}
-            </div>
+            <div className="error-msg">{error}</div>
           )}
 
-          <form onSubmit={handleSubmit}>
+          {/*
+            Key mobile fixes:
+            - id on inputs matches htmlFor on labels (accessibility + tap target)
+            - name attributes tell password managers what each field is
+            - autocomplete="username" / "current-password" triggers autofill
+            - inputMode hints the mobile keyboard
+            - The form has a real action="#" so iOS Safari treats it as a login form
+            - No autocorrect/autocapitalize on the username field
+          */}
+          <form
+            onSubmit={handleSubmit}
+            method="post"
+            action="#"
+            autoComplete="on"
+          >
             <div className="form-group">
-              <label>Email / Username</label>
+              <label htmlFor="login-username">Username</label>
               <input
+                id="login-username"
                 type="text"
+                name="username"
+                autoComplete="username"
+                autoCorrect="off"
+                autoCapitalize="none"
+                spellCheck="false"
                 value={username}
                 onChange={e => setUsername(e.target.value)}
                 placeholder="admin"
@@ -130,16 +129,21 @@ export default function LoginPage() {
                 required
               />
             </div>
+
             <div className="form-group" style={{ marginBottom: 24 }}>
-              <label>Password</label>
+              <label htmlFor="login-password">Password</label>
               <input
+                id="login-password"
                 type="password"
+                name="password"
+                autoComplete="current-password"
                 value={password}
                 onChange={e => setPassword(e.target.value)}
                 placeholder="Password"
                 required
               />
             </div>
+
             <button
               type="submit"
               className="btn btn-primary"
@@ -147,10 +151,12 @@ export default function LoginPage() {
               style={{
                 width: '100%',
                 justifyContent: 'center',
-                padding: '10px 18px',
-                fontSize: '0.875rem',
+                padding: '12px 18px',
+                fontSize: '0.9rem',
                 fontWeight: 700,
                 borderRadius: 'var(--radius-sm)',
+                /* Ensure minimum tap target on mobile */
+                minHeight: '44px',
               }}
             >
               {loading ? <span className="loading-spinner" /> : 'Sign in'}
@@ -158,12 +164,7 @@ export default function LoginPage() {
           </form>
         </div>
 
-        <p style={{
-          textAlign: 'center',
-          marginTop: 20,
-          fontSize: '0.73rem',
-          color: 'var(--text-dim)',
-        }}>
+        <p style={{ textAlign: 'center', marginTop: 20, fontSize: '0.73rem', color: 'var(--text-dim)' }}>
           immich share · admin console
         </p>
       </div>
