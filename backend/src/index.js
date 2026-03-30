@@ -46,10 +46,17 @@ app.use(cors({
 // Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 500,
+  max: 1000,
   standardHeaders: true,
   legacyHeaders: false,
-  handler: (req, res) => res.status(429).json({ error: 'Too many requests, please try again later.' }),
+  // Skip rate limiting for upload endpoints — chunked uploads generate
+  // many requests per file and must not be throttled here.
+  skip: (req) => {
+    const p = req.path;
+    return p.includes('/upload');
+  },
+  handler: (req, res) =>
+    res.status(429).json({ error: 'Too many requests, please try again later.' }),
 });
 
 const authLimiter = rateLimit({
