@@ -137,8 +137,11 @@ router.post('/content/:id', async (req, res) => {
 
 // ── Download all as ZIP ───────────────────────────────────────────────────────
 // GET /public/zip/:id?t=<sessionToken>
-// Streams a ZIP of all original assets in the share.
-// Uses no extra npm packages — assembles ZIP manually (STORE method, no compression).
+//
+// Streams a ZIP using data descriptors (flag bit 3).  Each asset is piped
+// directly from Immich → client with NO intermediate buffer.  CRC-32 and
+// file size are computed incrementally while streaming and written in a
+// trailing Data Descriptor record.  RAM usage is O(1) regardless of album size.
 router.get('/zip/:id', async (req, res) => {
   const sessionToken = req.query.t;
   if (!sessionToken) return res.status(400).send('Session token required');
@@ -170,7 +173,6 @@ router.get('/zip/:id', async (req, res) => {
     res.setHeader('Transfer-Encoding', 'chunked');
 
     const crc32Table = makeCrc32Table();
-
     const centralDir = [];
     let offset = 0;
 
@@ -183,78 +185,99 @@ router.get('/zip/:id', async (req, res) => {
         continue;
       }
 
+      // Derive filename
       const contentDisp = upstream.headers.get('content-disposition') || '';
       let filename = asset.originalFileName || asset.id;
       const cdMatch = contentDisp.match(/filename[^;=\n]*=(['"]?)([^'";\n]+)\1/i);
       if (cdMatch) filename = cdMatch[2].trim();
       filename = `${String(i + 1).padStart(4, '0')}_${filename}`;
 
-      const chunks = [];
-      for await (const chunk of upstream.body) {
-        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      }
-      const fileData = Buffer.concat(chunks);
-      const crc = crc32(crc32Table, fileData);
-      const size = fileData.length;
-
       const nameBytes = Buffer.from(filename, 'utf8');
       const dosTime = dosDateTime(new Date());
 
+      // ── Local File Header ─────────────────────────────────────────────────
+      // Flag 0x0808: bit3 = data descriptor present, bit11 = UTF-8 filename.
+      // CRC and sizes are 0 here — filled by the Data Descriptor below.
       const lfh = Buffer.alloc(30 + nameBytes.length);
-      lfh.writeUInt32LE(0x04034b50, 0);
-      lfh.writeUInt16LE(20, 4);
-      lfh.writeUInt16LE(0, 6);
-      lfh.writeUInt16LE(0, 8);
+      lfh.writeUInt32LE(0x04034b50, 0);   // signature
+      lfh.writeUInt16LE(20, 4);            // version needed (2.0)
+      lfh.writeUInt16LE(0x0808, 6);        // general purpose flags
+      lfh.writeUInt16LE(0, 8);             // compression: STORE
       lfh.writeUInt16LE(dosTime.time, 10);
       lfh.writeUInt16LE(dosTime.date, 12);
-      lfh.writeUInt32LE(crc >>> 0, 14);
-      lfh.writeUInt32LE(size, 18);
-      lfh.writeUInt32LE(size, 22);
+      lfh.writeUInt32LE(0, 14);            // CRC-32 placeholder
+      lfh.writeUInt32LE(0, 18);            // compressed size placeholder
+      lfh.writeUInt32LE(0, 22);            // uncompressed size placeholder
       lfh.writeUInt16LE(nameBytes.length, 26);
-      lfh.writeUInt16LE(0, 28);
+      lfh.writeUInt16LE(0, 28);            // extra field length
       nameBytes.copy(lfh, 30);
 
       res.write(lfh);
-      res.write(fileData);
 
+      // ── Stream file data, computing CRC-32 and size incrementally ─────────
+      let crc = 0xFFFFFFFF;
+      let fileSize = 0;
+
+      for await (const chunk of upstream.body) {
+        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        for (let j = 0; j < buf.length; j++) {
+          crc = (crc >>> 8) ^ crc32Table[(crc ^ buf[j]) & 0xFF];
+        }
+        fileSize += buf.length;
+        res.write(buf);
+      }
+
+      crc = (crc ^ 0xFFFFFFFF) >>> 0;
+
+      // ── Data Descriptor ───────────────────────────────────────────────────
+      const dd = Buffer.alloc(16);
+      dd.writeUInt32LE(0x08074b50, 0);   // optional signature
+      dd.writeUInt32LE(crc, 4);
+      dd.writeUInt32LE(fileSize, 8);     // compressed size (= uncompressed, STORE)
+      dd.writeUInt32LE(fileSize, 12);    // uncompressed size
+      res.write(dd);
+
+      // ── Central Directory record (queued, written after all files) ────────
       const cde = Buffer.alloc(46 + nameBytes.length);
       cde.writeUInt32LE(0x02014b50, 0);
-      cde.writeUInt16LE(20, 4);
-      cde.writeUInt16LE(20, 6);
-      cde.writeUInt16LE(0, 8);
-      cde.writeUInt16LE(0, 10);
+      cde.writeUInt16LE(20, 4);           // version made by
+      cde.writeUInt16LE(20, 6);           // version needed
+      cde.writeUInt16LE(0x0808, 8);       // flags (match LFH)
+      cde.writeUInt16LE(0, 10);           // compression: STORE
       cde.writeUInt16LE(dosTime.time, 12);
       cde.writeUInt16LE(dosTime.date, 14);
-      cde.writeUInt32LE(crc >>> 0, 16);
-      cde.writeUInt32LE(size, 20);
-      cde.writeUInt32LE(size, 24);
+      cde.writeUInt32LE(crc, 16);
+      cde.writeUInt32LE(fileSize, 20);
+      cde.writeUInt32LE(fileSize, 24);
       cde.writeUInt16LE(nameBytes.length, 28);
-      cde.writeUInt16LE(0, 30);
-      cde.writeUInt16LE(0, 32);
-      cde.writeUInt16LE(0, 34);
-      cde.writeUInt16LE(0, 36);
-      cde.writeUInt32LE(0, 38);
-      cde.writeUInt32LE(offset, 42);
+      cde.writeUInt16LE(0, 30);  // extra field length
+      cde.writeUInt16LE(0, 32);  // file comment length
+      cde.writeUInt16LE(0, 34);  // disk number start
+      cde.writeUInt16LE(0, 36);  // internal file attributes
+      cde.writeUInt32LE(0, 38);  // external file attributes
+      cde.writeUInt32LE(offset, 42);  // relative offset of LFH
       nameBytes.copy(cde, 46);
 
       centralDir.push(cde);
-      offset += lfh.length + size;
+      // Advance offset: LFH + raw file data + data descriptor
+      offset += lfh.length + fileSize + 16;
     }
 
+    // ── Central Directory ─────────────────────────────────────────────────────
     const cdOffset = offset;
     for (const cde of centralDir) res.write(cde);
-
     const cdSize = centralDir.reduce((a, b) => a + b.length, 0);
 
+    // ── End of Central Directory record ──────────────────────────────────────
     const eocd = Buffer.alloc(22);
     eocd.writeUInt32LE(0x06054b50, 0);
-    eocd.writeUInt16LE(0, 4);
-    eocd.writeUInt16LE(0, 6);
+    eocd.writeUInt16LE(0, 4);   // disk number
+    eocd.writeUInt16LE(0, 6);   // disk with CD start
     eocd.writeUInt16LE(centralDir.length, 8);
     eocd.writeUInt16LE(centralDir.length, 10);
     eocd.writeUInt32LE(cdSize, 12);
     eocd.writeUInt32LE(cdOffset, 16);
-    eocd.writeUInt16LE(0, 20);
+    eocd.writeUInt16LE(0, 20);  // comment length
     res.write(eocd);
     res.end();
 
@@ -577,14 +600,6 @@ function makeCrc32Table() {
     table[i] = c;
   }
   return table;
-}
-
-function crc32(table, buf) {
-  let crc = 0xFFFFFFFF;
-  for (let i = 0; i < buf.length; i++) {
-    crc = (crc >>> 8) ^ table[(crc ^ buf[i]) & 0xFF];
-  }
-  return (crc ^ 0xFFFFFFFF) >>> 0;
 }
 
 function dosDateTime(d) {
