@@ -4,7 +4,7 @@ const os = require('os');
 const fs = require('fs');
 const pathLib = require('path');
 const { getDb } = require('../db');
-const { getAlbum, getAssetsByTag, proxyAssetOriginal } = require('../immich');
+const { getAlbum, getAssetsByTag, proxyAssetOriginal, tagAssets } = require('../immich');
 const { makeToken, verifyToken } = require('../shareSession');
 
 const router = express.Router();
@@ -89,6 +89,8 @@ router.post('/verify/:id', async (req, res) => {
     allow_download: share.allow_download === 1,
     allow_upload: share.allow_upload === 1,
     show_metadata: share.show_metadata === 1,
+    // Pass upload_tag_ids so the frontend can show which tags will be applied
+    upload_tag_ids: share.upload_tag_ids || null,
     sessionToken,
     verified: true,
   });
@@ -136,12 +138,6 @@ router.post('/content/:id', async (req, res) => {
 });
 
 // ── Download all as ZIP ───────────────────────────────────────────────────────
-// GET /public/zip/:id?t=<sessionToken>
-//
-// Streams a ZIP using data descriptors (flag bit 3).  Each asset is piped
-// directly from Immich → client with NO intermediate buffer.  CRC-32 and
-// file size are computed incrementally while streaming and written in a
-// trailing Data Descriptor record.  RAM usage is O(1) regardless of album size.
 router.get('/zip/:id', async (req, res) => {
   const sessionToken = req.query.t;
   if (!sessionToken) return res.status(400).send('Session token required');
@@ -185,35 +181,28 @@ router.get('/zip/:id', async (req, res) => {
         continue;
       }
 
-      // Derive filename
-      // Derive filename — always prefer originalFileName we already fetched.
-      // The content-disposition header from Immich is often an opaque ID like "UFP-8".
-      let filename = asset.originalFileName || asset.id
-      filename = `${String(i + 1).padStart(4, '0')}_${filename}`
+      let filename = asset.originalFileName || asset.id;
+      filename = `${String(i + 1).padStart(4, '0')}_${filename}`;
 
       const nameBytes = Buffer.from(filename, 'utf8');
       const dosTime = dosDateTime(new Date());
 
-      // ── Local File Header ─────────────────────────────────────────────────
-      // Flag 0x0808: bit3 = data descriptor present, bit11 = UTF-8 filename.
-      // CRC and sizes are 0 here — filled by the Data Descriptor below.
       const lfh = Buffer.alloc(30 + nameBytes.length);
-      lfh.writeUInt32LE(0x04034b50, 0);   // signature
-      lfh.writeUInt16LE(20, 4);            // version needed (2.0)
-      lfh.writeUInt16LE(0x0808, 6);        // general purpose flags
-      lfh.writeUInt16LE(0, 8);             // compression: STORE
+      lfh.writeUInt32LE(0x04034b50, 0);
+      lfh.writeUInt16LE(20, 4);
+      lfh.writeUInt16LE(0x0808, 6);
+      lfh.writeUInt16LE(0, 8);
       lfh.writeUInt16LE(dosTime.time, 10);
       lfh.writeUInt16LE(dosTime.date, 12);
-      lfh.writeUInt32LE(0, 14);            // CRC-32 placeholder
-      lfh.writeUInt32LE(0, 18);            // compressed size placeholder
-      lfh.writeUInt32LE(0, 22);            // uncompressed size placeholder
+      lfh.writeUInt32LE(0, 14);
+      lfh.writeUInt32LE(0, 18);
+      lfh.writeUInt32LE(0, 22);
       lfh.writeUInt16LE(nameBytes.length, 26);
-      lfh.writeUInt16LE(0, 28);            // extra field length
+      lfh.writeUInt16LE(0, 28);
       nameBytes.copy(lfh, 30);
 
       res.write(lfh);
 
-      // ── Stream file data, computing CRC-32 and size incrementally ─────────
       let crc = 0xFFFFFFFF;
       let fileSize = 0;
 
@@ -228,55 +217,50 @@ router.get('/zip/:id', async (req, res) => {
 
       crc = (crc ^ 0xFFFFFFFF) >>> 0;
 
-      // ── Data Descriptor ───────────────────────────────────────────────────
       const dd = Buffer.alloc(16);
-      dd.writeUInt32LE(0x08074b50, 0);   // optional signature
+      dd.writeUInt32LE(0x08074b50, 0);
       dd.writeUInt32LE(crc, 4);
-      dd.writeUInt32LE(fileSize, 8);     // compressed size (= uncompressed, STORE)
-      dd.writeUInt32LE(fileSize, 12);    // uncompressed size
+      dd.writeUInt32LE(fileSize, 8);
+      dd.writeUInt32LE(fileSize, 12);
       res.write(dd);
 
-      // ── Central Directory record (queued, written after all files) ────────
       const cde = Buffer.alloc(46 + nameBytes.length);
       cde.writeUInt32LE(0x02014b50, 0);
-      cde.writeUInt16LE(20, 4);           // version made by
-      cde.writeUInt16LE(20, 6);           // version needed
-      cde.writeUInt16LE(0x0808, 8);       // flags (match LFH)
-      cde.writeUInt16LE(0, 10);           // compression: STORE
+      cde.writeUInt16LE(20, 4);
+      cde.writeUInt16LE(20, 6);
+      cde.writeUInt16LE(0x0808, 8);
+      cde.writeUInt16LE(0, 10);
       cde.writeUInt16LE(dosTime.time, 12);
       cde.writeUInt16LE(dosTime.date, 14);
       cde.writeUInt32LE(crc, 16);
       cde.writeUInt32LE(fileSize, 20);
       cde.writeUInt32LE(fileSize, 24);
       cde.writeUInt16LE(nameBytes.length, 28);
-      cde.writeUInt16LE(0, 30);  // extra field length
-      cde.writeUInt16LE(0, 32);  // file comment length
-      cde.writeUInt16LE(0, 34);  // disk number start
-      cde.writeUInt16LE(0, 36);  // internal file attributes
-      cde.writeUInt32LE(0, 38);  // external file attributes
-      cde.writeUInt32LE(offset, 42);  // relative offset of LFH
+      cde.writeUInt16LE(0, 30);
+      cde.writeUInt16LE(0, 32);
+      cde.writeUInt16LE(0, 34);
+      cde.writeUInt16LE(0, 36);
+      cde.writeUInt32LE(0, 38);
+      cde.writeUInt32LE(offset, 42);
       nameBytes.copy(cde, 46);
 
       centralDir.push(cde);
-      // Advance offset: LFH + raw file data + data descriptor
       offset += lfh.length + fileSize + 16;
     }
 
-    // ── Central Directory ─────────────────────────────────────────────────────
     const cdOffset = offset;
     for (const cde of centralDir) res.write(cde);
     const cdSize = centralDir.reduce((a, b) => a + b.length, 0);
 
-    // ── End of Central Directory record ──────────────────────────────────────
     const eocd = Buffer.alloc(22);
     eocd.writeUInt32LE(0x06054b50, 0);
-    eocd.writeUInt16LE(0, 4);   // disk number
-    eocd.writeUInt16LE(0, 6);   // disk with CD start
+    eocd.writeUInt16LE(0, 4);
+    eocd.writeUInt16LE(0, 6);
     eocd.writeUInt16LE(centralDir.length, 8);
     eocd.writeUInt16LE(centralDir.length, 10);
     eocd.writeUInt32LE(cdSize, 12);
     eocd.writeUInt32LE(cdOffset, 16);
-    eocd.writeUInt16LE(0, 20);  // comment length
+    eocd.writeUInt16LE(0, 20);
     res.write(eocd);
     res.end();
 
@@ -287,7 +271,20 @@ router.get('/zip/:id', async (req, res) => {
   }
 });
 
-// ── Original single-request upload (kept for backward compatibility) ──────────
+// ── Helper: apply upload tags to an asset ────────────────────────────────────
+async function applyUploadTags(share, assetId) {
+  if (!share.upload_tag_ids) return;
+  const tagIds = share.upload_tag_ids.split(',').map(s => s.trim()).filter(Boolean);
+  for (const tagId of tagIds) {
+    try {
+      await tagAssets(tagId, [assetId]);
+    } catch (err) {
+      console.error(`[upload] Failed to apply tag ${tagId} to asset ${assetId}: ${err.message}`);
+    }
+  }
+}
+
+// ── Original single-request upload ───────────────────────────────────────────
 router.post('/upload/:id', async (req, res) => {
   const sessionToken = req.query.t;
   if (!sessionToken) return res.status(400).json({ error: 'Session token required' });
@@ -338,11 +335,13 @@ router.post('/upload/:id', async (req, res) => {
       });
       if (!albumRes.ok) {
         const albumErr = await albumRes.text();
-        console.error(`[upload] Failed to add asset ${uploadData.id} to album ${share.immich_album_id}: ${albumRes.status} ${albumErr}`);
-      } else {
-        const albumData = await albumRes.json();
-        console.log(`[upload] Album add result:`, JSON.stringify(albumData));
+        console.error(`[upload] Failed to add asset ${uploadData.id} to album: ${albumRes.status} ${albumErr}`);
       }
+    }
+
+    // Apply upload tags if configured
+    if (uploadData.id) {
+      await applyUploadTags(share, uploadData.id);
     }
 
     logAccess(share, req, 'upload');
@@ -352,14 +351,7 @@ router.post('/upload/:id', async (req, res) => {
   }
 });
 
-// ── Chunked upload: receive one chunk ─────────────────────────────────────────
-// POST /public/upload-chunk/:id?t=<token>
-// Body: multipart/form-data with fields:
-//   chunkData    - the raw bytes for this chunk
-//   uploadId     - client-generated UUID for this upload session
-//   chunkIndex   - 0-based index
-//   totalChunks  - total number of chunks
-//   filename     - original filename
+// ── Chunked upload: receive one chunk ────────────────────────────────────────
 router.post('/upload-chunk/:id', async (req, res) => {
   const sessionToken = req.query.t;
   if (!sessionToken) return res.status(400).json({ error: 'Session token required' });
@@ -377,7 +369,6 @@ router.post('/upload-chunk/:id', async (req, res) => {
   const boundaryMatch = contentType.match(/boundary=([^\s;]+)/);
   if (!boundaryMatch) return res.status(400).json({ error: 'Missing multipart boundary' });
 
-  // Buffer the stream — chunks are small (≤ ~5 MB)
   const buffers = [];
   for await (const chunk of req) buffers.push(chunk);
   const body = Buffer.concat(buffers);
@@ -400,7 +391,7 @@ router.post('/upload-chunk/:id', async (req, res) => {
 
   const { uploadId, chunkIndex, totalChunks, filename } = fields;
   if (!uploadId || chunkIndex === undefined || !totalChunks || !chunkBuffer) {
-    return res.status(400).json({ error: 'Missing required chunk fields (uploadId, chunkIndex, totalChunks, chunkData)' });
+    return res.status(400).json({ error: 'Missing required chunk fields' });
   }
 
   const tmpDir = pathLib.join(os.tmpdir(), 'immich-share-chunks', uploadId);
@@ -409,7 +400,6 @@ router.post('/upload-chunk/:id', async (req, res) => {
   const chunkPath = pathLib.join(tmpDir, `chunk_${String(chunkIndex).padStart(6, '0')}`);
   fs.writeFileSync(chunkPath, chunkBuffer);
 
-  // Write metadata on first chunk arrival (idempotent)
   const metaPath = pathLib.join(tmpDir, 'meta.json');
   if (!fs.existsSync(metaPath)) {
     fs.writeFileSync(metaPath, JSON.stringify({
@@ -429,9 +419,6 @@ router.post('/upload-chunk/:id', async (req, res) => {
 });
 
 // ── Chunked upload: assemble and forward to Immich ────────────────────────────
-// POST /public/upload-assemble/:id?t=<token>
-// Body JSON: { uploadId, filename, deviceAssetId, fileCreatedAt, fileModifiedAt }
-// (express.json() is applied to this path in index.js)
 router.post('/upload-assemble/:id', async (req, res) => {
   const sessionToken = req.query.t;
   if (!sessionToken) return res.status(400).json({ error: 'Session token required' });
@@ -458,7 +445,6 @@ router.post('/upload-assemble/:id', async (req, res) => {
     return res.status(500).json({ error: 'Could not read upload session metadata' });
   }
 
-  // Verify every chunk is present before assembling
   const chunkFiles = [];
   for (let i = 0; i < meta.totalChunks; i++) {
     const p = pathLib.join(tmpDir, `chunk_${String(i).padStart(6, '0')}`);
@@ -468,11 +454,9 @@ router.post('/upload-assemble/:id', async (req, res) => {
     chunkFiles.push(p);
   }
 
-  // Assemble chunks into one buffer
   const chunkBuffers = chunkFiles.map(p => fs.readFileSync(p));
   const fileData = Buffer.concat(chunkBuffers);
 
-  // Get Immich config
   const settingsDb = getDb();
   const urlRow = settingsDb.prepare("SELECT value FROM settings WHERE key = 'immich_url'").get();
   const keyRow = settingsDb.prepare("SELECT value FROM settings WHERE key = 'immich_api_key'").get();
@@ -527,7 +511,6 @@ router.post('/upload-assemble/:id', async (req, res) => {
       throw new Error(uploadData.message || `Immich responded with ${uploadRes.status}`);
     }
 
-    // Immich may return the existing asset id if it's a duplicate — use it either way
     const assetId = uploadData.id;
 
     if (!assetId) {
@@ -544,8 +527,9 @@ router.post('/upload-assemble/:id', async (req, res) => {
 
       if (!albumRes.ok) {
         const albumErr = await albumRes.text();
-        console.error(`[upload-assemble] Failed to add asset ${assetId} to album ${share.immich_album_id}: ${albumRes.status} ${albumErr}`);
-        // Upload succeeded but album add failed — tell the client
+        console.error(`[upload-assemble] Failed to add asset ${assetId} to album: ${albumRes.status} ${albumErr}`);
+        // Upload succeeded but album add failed
+        await applyUploadTags(share, assetId);
         logAccess(share, req, 'upload');
         return res.json({
           success: true,
@@ -557,6 +541,9 @@ router.post('/upload-assemble/:id', async (req, res) => {
       const albumData = await albumRes.json();
       console.log(`[upload-assemble] Album add result:`, JSON.stringify(albumData));
     }
+
+    // Apply upload tags if configured on this share
+    await applyUploadTags(share, assetId);
 
     logAccess(share, req, 'upload');
     res.json({ success: true, assetId });
@@ -570,7 +557,6 @@ router.post('/upload-assemble/:id', async (req, res) => {
 });
 
 // ── Chunked upload: cancel / clean up ────────────────────────────────────────
-// DELETE /public/upload-chunk/:id/:uploadId?t=<token>
 router.delete('/upload-chunk/:id/:uploadId', (req, res) => {
   const sessionToken = req.query.t;
   if (!sessionToken) return res.status(400).json({ error: 'Session token required' });
@@ -609,10 +595,6 @@ function dosDateTime(d) {
 
 // ── Chunked upload helpers ────────────────────────────────────────────────────
 
-/**
- * Minimal multipart/form-data parser.
- * Returns array of { headers: { key: value }, data: Buffer }
- */
 function parseMultipart(body, boundary) {
   const parts = [];
   const boundaryBuf = Buffer.from('\r\n--' + boundary);
@@ -623,12 +605,9 @@ function parseMultipart(body, boundary) {
   pos += startBuf.length;
 
   while (pos < body.length) {
-    // Final boundary ends with --
     if (body[pos] === 0x2d && body[pos + 1] === 0x2d) break;
-    // Skip \r\n after boundary line
     if (body[pos] === 0x0d && body[pos + 1] === 0x0a) pos += 2;
 
-    // Find end of headers (\r\n\r\n)
     const headerEnd = body.indexOf(Buffer.from('\r\n\r\n'), pos);
     if (headerEnd === -1) break;
 
@@ -641,9 +620,8 @@ function parseMultipart(body, boundary) {
       }
     }
 
-    pos = headerEnd + 4; // skip \r\n\r\n
+    pos = headerEnd + 4;
 
-    // Find next boundary
     const nextBoundary = body.indexOf(boundaryBuf, pos);
     const dataEnd = nextBoundary !== -1 ? nextBoundary : body.length;
     parts.push({ headers, data: body.slice(pos, dataEnd) });

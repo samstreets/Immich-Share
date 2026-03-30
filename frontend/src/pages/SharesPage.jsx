@@ -268,6 +268,143 @@ function SlugPreview({ slug, externalUrl }) {
   )
 }
 
+// ── Inline create album/tag helper ────────────────────────────────────────────
+function InlineCreate({ type, onCreate, onCancel }) {
+  // type: 'album' | 'tag'
+  const [name, setName] = useState('')
+  const [desc, setDesc] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  async function submit(e) {
+    e.preventDefault()
+    if (!name.trim()) return
+    setLoading(true); setError('')
+    try {
+      const token = localStorage.getItem('admin_token')
+      const endpoint = type === 'album' ? '/api/admin/immich/albums' : '/api/admin/immich/tags'
+      const body = type === 'album'
+        ? { albumName: name.trim(), description: desc.trim() }
+        : { name: name.trim() }
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(body),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Failed')
+      onCreate(data)
+    } catch (err) {
+      setError(err.message)
+      setLoading(false)
+    }
+  }
+
+  const label = type === 'album' ? 'Album' : 'Tag'
+  const placeholder = type === 'album' ? 'e.g. Summer 2024' : 'e.g. vacation'
+
+  return (
+    <div style={{
+      background: 'var(--bg3)', border: '1px solid var(--accent)', borderRadius: 'var(--radius-sm)',
+      padding: '12px 14px', marginTop: 8, animation: 'slideDown 0.15s ease',
+    }}>
+      <style>{`@keyframes slideDown { from { opacity:0; transform:translateY(-4px) } }`}</style>
+      <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--accent)', letterSpacing: '0.05em', textTransform: 'uppercase', marginBottom: 10 }}>
+        New Immich {label}
+      </div>
+      {error && <div style={{ fontSize: '0.75rem', color: 'var(--red)', marginBottom: 8 }}>⚠ {error}</div>}
+      <form onSubmit={submit}>
+        <div style={{ marginBottom: type === 'album' ? 8 : 0 }}>
+          <input
+            value={name}
+            onChange={e => setName(e.target.value)}
+            placeholder={`${label} name — ${placeholder}`}
+            autoFocus
+            required
+            style={{ marginBottom: 0 }}
+          />
+        </div>
+        {type === 'album' && (
+          <div style={{ marginTop: 8 }}>
+            <input
+              value={desc}
+              onChange={e => setDesc(e.target.value)}
+              placeholder="Description (optional)"
+            />
+          </div>
+        )}
+        <div style={{ display: 'flex', gap: 7, marginTop: 10 }}>
+          <button type="submit" className="btn btn-primary btn-sm" disabled={loading || !name.trim()}>
+            {loading ? <span className="loading-spinner" style={{ width: 11, height: 11 }} /> : `Create ${label}`}
+          </button>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={onCancel}>Cancel</button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
+// ── Tag multi-picker (for upload tags) ────────────────────────────────────────
+function TagPicker({ tags, selectedIds, onChange, onRefresh }) {
+  const [creating, setCreating] = useState(false)
+
+  function toggle(id) {
+    const next = selectedIds.includes(id)
+      ? selectedIds.filter(x => x !== id)
+      : [...selectedIds, id]
+    onChange(next)
+  }
+
+  function handleCreated(tag) {
+    setCreating(false)
+    onRefresh(tag)
+    onChange([...selectedIds, tag.id])
+  }
+
+  return (
+    <div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: creating ? 0 : 8 }}>
+        {tags.length === 0
+          ? <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>No tags in Immich yet.</span>
+          : tags.map(tag => {
+              const id = tag.id
+              const label = tag.value ?? tag.name ?? id
+              const active = selectedIds.includes(id)
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => toggle(id)}
+                  style={{
+                    padding: '3px 11px', borderRadius: 999, fontSize: '0.75rem', fontWeight: 600,
+                    background: active ? 'var(--accent)' : 'var(--bg3)',
+                    color: active ? '#0d0a00' : 'var(--text-muted)',
+                    border: active ? '1px solid var(--accent)' : '1px solid var(--border)',
+                    cursor: 'pointer', fontFamily: 'inherit', transition: 'all 0.12s',
+                  }}
+                >
+                  {active && '✓ '}{label}
+                </button>
+              )
+            })
+        }
+      </div>
+      {creating ? (
+        <InlineCreate
+          type="tag"
+          onCreate={handleCreated}
+          onCancel={() => setCreating(false)}
+        />
+      ) : (
+        <button type="button" className="btn btn-ghost btn-sm" onClick={() => setCreating(true)} style={{ marginTop: 2 }}>
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          New tag in Immich
+        </button>
+      )}
+    </div>
+  )
+}
+
 // ── Share form modal ──────────────────────────────────────────────────────────
 function ShareModal({ onClose, onSaved, editShare }) {
   const api = useApi()
@@ -275,6 +412,15 @@ function ShareModal({ onClose, onSaved, editShare }) {
   const [tags, setTags] = useState([])
   const [sourceLoading, setSourceLoading] = useState(false)
   const [externalUrl, setExternalUrl] = useState('')
+
+  // Inline create album state
+  const [creatingAlbum, setCreatingAlbum] = useState(false)
+  const [creatingTag, setCreatingTag] = useState(false)
+
+  const existingTagIds = editShare?.upload_tag_ids
+    ? editShare.upload_tag_ids.split(',').map(s => s.trim()).filter(Boolean)
+    : []
+
   const [form, setForm] = useState({
     name: editShare?.name || '',
     description: editShare?.description || '',
@@ -286,6 +432,7 @@ function ShareModal({ onClose, onSaved, editShare }) {
     allow_download: editShare?.allow_download !== false,
     allow_upload: editShare?.allow_upload || false,
     show_metadata: editShare?.show_metadata || false,
+    upload_tag_ids: existingTagIds,  // array of tag IDs to apply on upload
     slug: editShare?.slug || '',
   })
   const [error, setError] = useState('')
@@ -306,19 +453,65 @@ function ShareModal({ onClose, onSaved, editShare }) {
 
   function set(key, val) { setForm(f => ({ ...f, [key]: val })) }
 
+  // Called when a new album is created inline
+  function handleAlbumCreated(album) {
+    setAlbums(prev => [album, ...prev])
+    set('immich_album_id', album.id)
+    setCreatingAlbum(false)
+  }
+
+  // Called when a new tag is created inline (for share_type=tag selector)
+  function handleTagCreated(tag) {
+    setTags(prev => [tag, ...prev])
+    set('immich_tag_id', tag.id)
+    setCreatingTag(false)
+  }
+
+  // Called when a new tag is created from the upload-tags picker
+  function handleUploadTagRefresh(tag) {
+    setTags(prev => {
+      if (prev.find(t => t.id === tag.id)) return prev
+      return [tag, ...prev]
+    })
+  }
+
   async function handleSubmit(e) {
     e.preventDefault(); setError(''); setSaving(true)
+    const uploadTagIdsStr = form.upload_tag_ids.join(',')
     try {
       if (editShare) {
         await api(`/shares/${editShare.id}`, {
           method: 'PATCH',
-          body: { name: form.name, description: form.description, password: form.password || undefined, expires_at: form.expires_at || null, allow_download: form.allow_download, allow_upload: form.allow_upload, show_metadata: form.show_metadata, slug: form.slug },
+          body: {
+            name: form.name,
+            description: form.description,
+            password: form.password || undefined,
+            expires_at: form.expires_at || null,
+            allow_download: form.allow_download,
+            allow_upload: form.allow_upload,
+            show_metadata: form.show_metadata,
+            upload_tag_ids: uploadTagIdsStr,
+            slug: form.slug,
+          },
         })
       } else {
         if (!form.password) throw new Error('Password is required')
         await api('/shares', {
           method: 'POST',
-          body: { name: form.name, description: form.description, share_type: form.share_type, immich_album_id: form.share_type === 'album' ? form.immich_album_id : undefined, immich_tag_id: form.share_type === 'tag' ? form.immich_tag_id : undefined, password: form.password, expires_at: form.expires_at || undefined, allow_download: form.allow_download, allow_upload: form.allow_upload, show_metadata: form.show_metadata, slug: form.slug || undefined },
+          body: {
+            name: form.name,
+            description: form.description,
+            share_type: form.share_type,
+            immich_album_id: form.share_type === 'album' ? form.immich_album_id : undefined,
+            immich_tag_id: form.share_type === 'tag' ? form.immich_tag_id : undefined,
+            password: form.password,
+            expires_at: form.expires_at || undefined,
+            allow_download: form.allow_download,
+            allow_upload: form.allow_upload,
+            show_metadata: form.show_metadata,
+            upload_tag_ids: uploadTagIdsStr,
+            slug: form.slug || undefined,
+          },
         })
       }
       onSaved()
@@ -355,16 +548,25 @@ function ShareModal({ onClose, onSaved, editShare }) {
         <div className="modal-body">
           {error && <div className="error-msg">⚠ {error}</div>}
           <form onSubmit={handleSubmit}>
+
+            {/* Name */}
             <div className="form-group">
               <label>Share Name *</label>
               <input value={form.name} onChange={e => set('name', e.target.value)} placeholder="Summer 2024 Photos" required />
             </div>
+
+            {/* Description */}
             <div className="form-group">
               <label>Description</label>
               <input value={form.description} onChange={e => set('description', e.target.value)} placeholder="Optional description for viewers" />
             </div>
+
+            {/* Custom slug */}
             <div className="form-group">
-              <label>Custom URL Slug <span style={{ marginLeft: 6, padding: '1px 7px', borderRadius: 4, fontSize: '0.68rem', background: 'var(--accent-dim)', color: 'var(--accent)', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' }}>optional</span></label>
+              <label>
+                Custom URL Slug{' '}
+                <span style={{ marginLeft: 6, padding: '1px 7px', borderRadius: 4, fontSize: '0.68rem', background: 'var(--accent-dim)', color: 'var(--accent)', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' }}>optional</span>
+              </label>
               <div style={{ position: 'relative' }}>
                 <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-dim)', fontSize: '0.85rem', pointerEvents: 'none', userSelect: 'none', fontWeight: 600 }}>/s/</span>
                 <input value={form.slug} onChange={e => set('slug', e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))} placeholder="my-summer-trip" style={{ paddingLeft: 36 }} minLength={3} maxLength={60} />
@@ -372,6 +574,8 @@ function ShareModal({ onClose, onSaved, editShare }) {
               <SlugPreview slug={form.slug} externalUrl={externalUrl} />
               <span className="hint">3–60 chars, lowercase letters, numbers and hyphens only.</span>
             </div>
+
+            {/* Source selection — only for new shares */}
             {!editShare && (
               <>
                 <div className="form-group">
@@ -381,41 +585,130 @@ function ShareModal({ onClose, onSaved, editShare }) {
                     <option value="tag">Immich Tag</option>
                   </select>
                 </div>
+
+                {/* Album selector with inline create */}
                 {form.share_type === 'album' && (
                   <div className="form-group">
-                    <label>Album {sourceLoading && <span style={{ color: 'var(--text-dim)', fontWeight: 400 }}>(loading…)</span>}</label>
+                    <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <span>Album {sourceLoading && <span style={{ color: 'var(--text-dim)', fontWeight: 400 }}>(loading…)</span>}</span>
+                      {!creatingAlbum && (
+                        <button
+                          type="button"
+                          onClick={() => setCreatingAlbum(true)}
+                          style={{
+                            background: 'none', border: 'none', cursor: 'pointer',
+                            color: 'var(--accent)', fontSize: '0.7rem', fontWeight: 700,
+                            display: 'flex', alignItems: 'center', gap: 4, fontFamily: 'inherit',
+                            padding: 0, letterSpacing: '0.03em',
+                          }}
+                        >
+                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                          New album in Immich
+                        </button>
+                      )}
+                    </label>
                     <select value={form.immich_album_id} onChange={e => set('immich_album_id', e.target.value)} required>
                       <option value="">Select an album…</option>
-                      {albums.map(a => <option key={a.id} value={a.id}>{a.albumName} ({a.assetCount} assets)</option>)}
+                      {albums.map(a => (
+                        <option key={a.id} value={a.id}>{a.albumName} ({a.assetCount ?? 0} assets)</option>
+                      ))}
                     </select>
-                    {albums.length === 0 && !sourceLoading && <span className="hint">No albums found — check Immich connection in Settings.</span>}
+                    {albums.length === 0 && !sourceLoading && !creatingAlbum && (
+                      <span className="hint">No albums found — check Immich connection in Settings.</span>
+                    )}
+                    {creatingAlbum && (
+                      <InlineCreate
+                        type="album"
+                        onCreate={handleAlbumCreated}
+                        onCancel={() => setCreatingAlbum(false)}
+                      />
+                    )}
                   </div>
                 )}
+
+                {/* Tag selector with inline create */}
                 {form.share_type === 'tag' && (
                   <div className="form-group">
-                    <label>Tag {sourceLoading && <span style={{ color: 'var(--text-dim)', fontWeight: 400 }}>(loading…)</span>}</label>
+                    <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <span>Tag {sourceLoading && <span style={{ color: 'var(--text-dim)', fontWeight: 400 }}>(loading…)</span>}</span>
+                      {!creatingTag && (
+                        <button
+                          type="button"
+                          onClick={() => setCreatingTag(true)}
+                          style={{
+                            background: 'none', border: 'none', cursor: 'pointer',
+                            color: 'var(--accent)', fontSize: '0.7rem', fontWeight: 700,
+                            display: 'flex', alignItems: 'center', gap: 4, fontFamily: 'inherit',
+                            padding: 0, letterSpacing: '0.03em',
+                          }}
+                        >
+                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                          New tag in Immich
+                        </button>
+                      )}
+                    </label>
                     <select value={form.immich_tag_id} onChange={e => set('immich_tag_id', e.target.value)} required>
                       <option value="">Select a tag…</option>
-                      {tags.map(tag => <option key={tag.id} value={tag.id}>{tag.value ?? tag.name ?? tag.id}</option>)}
+                      {tags.map(tag => (
+                        <option key={tag.id} value={tag.id}>{tag.value ?? tag.name ?? tag.id}</option>
+                      ))}
                     </select>
+                    {creatingTag && (
+                      <InlineCreate
+                        type="tag"
+                        onCreate={handleTagCreated}
+                        onCancel={() => setCreatingTag(false)}
+                      />
+                    )}
                   </div>
                 )}
               </>
             )}
+
+            {/* Password */}
             <div className="form-group">
               <label>{editShare ? 'New Password' : 'Password *'}</label>
               <input type="password" value={form.password} onChange={e => set('password', e.target.value)} placeholder={editShare ? 'Leave blank to keep current' : 'Set a share password'} required={!editShare} minLength={4} />
               <span className="hint">Viewers need this to access the share.</span>
             </div>
+
+            {/* Expiry */}
             <div className="form-group">
               <label>Expiry Date (optional)</label>
               <input type="datetime-local" value={form.expires_at} onChange={e => set('expires_at', e.target.value)} />
             </div>
-            <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 22, padding: '12px 14px', background: 'var(--bg3)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
+
+            {/* Options checkboxes */}
+            <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 16, padding: '12px 14px', background: 'var(--bg3)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
               <CheckBox checked={form.allow_download} onChange={v => set('allow_download', v)} label="Allow downloads" />
               <CheckBox checked={form.allow_upload} onChange={v => set('allow_upload', v)} label="Allow uploads" />
               <CheckBox checked={form.show_metadata} onChange={v => set('show_metadata', v)} label="Show metadata" />
             </div>
+
+            {/* Upload tags — only visible when uploads are enabled */}
+            {form.allow_upload && (
+              <div className="form-group" style={{ background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '12px 14px', marginBottom: 20 }}>
+                <label style={{ marginBottom: 8, display: 'block' }}>
+                  Auto-tag Uploaded Photos
+                  <span style={{ marginLeft: 8, padding: '1px 7px', borderRadius: 4, fontSize: '0.65rem', background: 'rgba(96,165,250,0.15)', color: 'var(--blue)', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' }}>optional</span>
+                </label>
+                <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: 10, lineHeight: 1.5 }}>
+                  Select tags to automatically apply to every photo uploaded through this share.
+                </p>
+                <TagPicker
+                  tags={tags}
+                  selectedIds={form.upload_tag_ids}
+                  onChange={ids => set('upload_tag_ids', ids)}
+                  onRefresh={handleUploadTagRefresh}
+                />
+                {form.upload_tag_ids.length > 0 && (
+                  <div style={{ marginTop: 8, fontSize: '0.72rem', color: 'var(--text-dim)' }}>
+                    {form.upload_tag_ids.length} tag{form.upload_tag_ids.length !== 1 ? 's' : ''} will be applied on upload
+                  </div>
+                )}
+              </div>
+            )}
+
             <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
               <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
               <button type="submit" className="btn btn-primary" disabled={saving}>
@@ -481,8 +774,6 @@ export default function SharesPage() {
 
   const [selected, setSelected] = useState(new Set())
   const [bulkDeleting, setBulkDeleting] = useState(false)
-
-  // Track which share's action menu is open (mobile)
   const [openMenu, setOpenMenu] = useState(null)
 
   const load = useCallback(async (opts = {}) => {
@@ -499,7 +790,6 @@ export default function SharesPage() {
   }, [api, search, typeFilter, statusFilter])
 
   useEffect(() => { load() }, [])
-  // Close open menu when clicking outside
   useEffect(() => {
     function handleClick() { setOpenMenu(null) }
     document.addEventListener('click', handleClick)
@@ -571,47 +861,24 @@ export default function SharesPage() {
           flex-wrap: wrap;
           align-items: flex-start;
         }
-        /* On mobile, actions collapse to a "..." menu */
         @media (max-width: 600px) {
-          .shares-actions-bar {
-            display: none;
-          }
-          .share-menu-btn {
-            display: flex !important;
-          }
+          .shares-actions-bar { display: none; }
+          .share-menu-btn { display: flex !important; }
         }
-        .share-menu-btn {
-          display: none;
-        }
+        .share-menu-btn { display: none; }
         .share-action-menu {
-          position: absolute;
-          right: 0;
-          top: calc(100% + 4px);
-          background: var(--bg2);
-          border: 1px solid var(--border-light);
-          border-radius: var(--radius-sm);
-          box-shadow: var(--shadow);
-          z-index: 50;
-          min-width: 180px;
-          overflow: hidden;
+          position: absolute; right: 0; top: calc(100% + 4px);
+          background: var(--bg2); border: 1px solid var(--border-light);
+          border-radius: var(--radius-sm); box-shadow: var(--shadow);
+          z-index: 50; min-width: 180px; overflow: hidden;
           animation: fadeIn 0.1s ease;
         }
         .share-action-menu button {
-          display: flex;
-          align-items: center;
-          gap: 10px;
-          width: 100%;
-          padding: 10px 14px;
-          background: transparent;
-          border: none;
-          border-bottom: 1px solid var(--border);
-          color: var(--text-muted);
-          font-size: 0.82rem;
-          font-weight: 500;
-          cursor: pointer;
-          font-family: inherit;
-          text-align: left;
-          transition: background 0.1s;
+          display: flex; align-items: center; gap: 10px;
+          width: 100%; padding: 10px 14px;
+          background: transparent; border: none; border-bottom: 1px solid var(--border);
+          color: var(--text-muted); font-size: 0.82rem; font-weight: 500;
+          cursor: pointer; font-family: inherit; text-align: left; transition: background 0.1s;
         }
         .share-action-menu button:last-child { border-bottom: none; }
         .share-action-menu button:hover { background: var(--bg-hover); color: var(--text); }
@@ -620,7 +887,6 @@ export default function SharesPage() {
         @keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } }
       `}</style>
 
-      {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, gap: 12 }}>
         <div>
           <h1 style={{ fontSize: '1.25rem', fontWeight: 700, letterSpacing: '-0.01em' }}>Shares</h1>
@@ -636,7 +902,6 @@ export default function SharesPage() {
         </button>
       </div>
 
-      {/* Filter bar */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' }}>
         <div style={{ position: 'relative', flex: '1 1 180px', minWidth: 0 }}>
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
@@ -664,7 +929,6 @@ export default function SharesPage() {
         </span>
       </div>
 
-      {/* Bulk bar */}
       <BulkBar
         selected={[...selected]} total={shares.length}
         onSelectAll={toggleSelectAll} onClearAll={() => setSelected(new Set())}
@@ -700,6 +964,9 @@ export default function SharesPage() {
           {shares.map(share => {
             const isSelected = selected.has(share.id)
             const menuOpen = openMenu === share.id
+            const uploadTagCount = share.upload_tag_ids
+              ? share.upload_tag_ids.split(',').filter(Boolean).length
+              : 0
             return (
               <div key={share.id} style={{
                 background: isSelected ? 'rgba(196,164,74,0.05)' : 'var(--bg2)',
@@ -725,7 +992,6 @@ export default function SharesPage() {
 
                   {/* Content */}
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    {/* Title + badges */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 5, flexWrap: 'wrap' }}>
                       <span style={{ fontWeight: 800, fontSize: '0.9rem', letterSpacing: '-0.01em' }}>{share.name}</span>
                       {!share.is_active && <span className="badge badge-yellow">Disabled</span>}
@@ -735,21 +1001,25 @@ export default function SharesPage() {
                       {share.slug && (
                         <span style={{ display: 'inline-flex', alignItems: 'center', padding: '2px 7px', borderRadius: 99, fontSize: '0.68rem', fontWeight: 700, background: 'rgba(96,165,250,0.1)', color: 'var(--blue)', fontFamily: 'monospace' }}>/s/{share.slug}</span>
                       )}
+                      {uploadTagCount > 0 && (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, padding: '2px 7px', borderRadius: 99, fontSize: '0.68rem', fontWeight: 700, background: 'rgba(74,222,128,0.1)', color: 'var(--green)' }}>
+                          🏷 {uploadTagCount} upload tag{uploadTagCount !== 1 ? 's' : ''}
+                        </span>
+                      )}
                     </div>
 
                     {share.description && (
                       <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: 6 }}>{share.description}</div>
                     )}
 
-                    {/* Meta */}
                     <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', fontSize: '0.72rem', color: 'var(--text-dim)', marginBottom: 10, fontWeight: 600 }}>
                       <span>👁 {share.view_count}</span>
                       {share.expires_at && <span>⏱ {new Date(share.expires_at).toLocaleDateString()}</span>}
                       <span>📅 {new Date(share.created_at).toLocaleDateString()}</span>
                       <span>{share.allow_download ? '⬇ On' : '⬇ Off'}</span>
+                      {share.allow_upload && <span>⬆ Uploads on</span>}
                     </div>
 
-                    {/* URL */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                       <div style={{
                         background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--radius-xs)',
@@ -796,7 +1066,7 @@ export default function SharesPage() {
                     </button>
                   </div>
 
-                  {/* Mobile "..." menu button */}
+                  {/* Mobile "..." menu */}
                   <div style={{ position: 'relative', flexShrink: 0 }}>
                     <button
                       className="share-menu-btn btn btn-secondary btn-sm"
@@ -813,25 +1083,13 @@ export default function SharesPage() {
                           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="5" height="5"/><rect x="16" y="3" width="5" height="5"/><rect x="3" y="16" width="5" height="5"/></svg>
                           QR Code
                         </button>
-                        <button onClick={() => { setStatsShare(share); setOpenMenu(null) }}>
-                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
-                          Stats
-                        </button>
-                        <button onClick={() => { setLogsShare(share); setOpenMenu(null) }}>
-                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/></svg>
-                          Logs
-                        </button>
+                        <button onClick={() => { setStatsShare(share); setOpenMenu(null) }}>Stats</button>
+                        <button onClick={() => { setLogsShare(share); setOpenMenu(null) }}>Logs</button>
                         <button onClick={() => { toggleActive(share); setOpenMenu(null) }}>
                           {share.is_active ? 'Disable Share' : 'Enable Share'}
                         </button>
-                        <button onClick={() => { setEditShare(share); setShowModal(true); setOpenMenu(null) }}>
-                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-                          Edit
-                        </button>
-                        <button className="danger" onClick={() => { setConfirmDelete(share); setOpenMenu(null) }}>
-                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-                          Delete
-                        </button>
+                        <button onClick={() => { setEditShare(share); setShowModal(true); setOpenMenu(null) }}>Edit</button>
+                        <button className="danger" onClick={() => { setConfirmDelete(share); setOpenMenu(null) }}>Delete</button>
                       </div>
                     )}
                   </div>

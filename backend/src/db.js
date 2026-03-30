@@ -57,6 +57,7 @@ function initDb() {
       allow_download INTEGER DEFAULT 1,
       allow_upload INTEGER DEFAULT 0,
       show_metadata INTEGER DEFAULT 0,
+      upload_tag_ids TEXT,
       view_count INTEGER DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -78,6 +79,11 @@ function initDb() {
       CREATE UNIQUE INDEX IF NOT EXISTS idx_shares_slug
       ON shares(slug) WHERE slug IS NOT NULL
     `);
+  }
+  // NEW: upload_tag_ids — comma-separated Immich tag IDs applied on upload
+  if (!cols.includes('upload_tag_ids')) {
+    db.exec(`ALTER TABLE shares ADD COLUMN upload_tag_ids TEXT`);
+    console.log('✅ shares.upload_tag_ids column added');
   }
 
   // Share access logs (without CASCADE — will be migrated below if needed)
@@ -104,12 +110,9 @@ function initDb() {
   }
 
   // Migrate: recreate access_logs with ON DELETE CASCADE if not already set.
-  // This ensures deleting a share automatically removes its logs and prevents
-  // the FOREIGN KEY constraint failures seen when shares are deleted.
   const fkInfo = db.prepare("PRAGMA foreign_key_list(access_logs)").all();
   const hasCascade = fkInfo.some(fk => fk.table === 'shares' && fk.on_delete === 'CASCADE');
   if (!hasCascade) {
-    // Temporarily disable FK enforcement so we can drop and recreate the table
     db.pragma('foreign_keys = OFF');
     db.exec(`
       CREATE TABLE access_logs_new (

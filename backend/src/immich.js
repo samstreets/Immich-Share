@@ -42,9 +42,31 @@ async function getAlbum(albumId) {
   return immichRequest(`/albums/${albumId}`);
 }
 
+async function createAlbum(albumName, description = '') {
+  return immichRequest('/albums', {
+    method: 'POST',
+    body: JSON.stringify({ albumName, description }),
+  });
+}
+
 // Tags — Immich exposes tags under /tags
 async function getTags() {
   return immichRequest('/tags');
+}
+
+async function createTag(name) {
+  return immichRequest('/tags', {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+  });
+}
+
+// Tag assets in bulk: PUT /tags/{id}/assets
+async function tagAssets(tagId, assetIds) {
+  return immichRequest(`/tags/${tagId}/assets`, {
+    method: 'PUT',
+    body: JSON.stringify({ ids: assetIds }),
+  });
 }
 
 // Assets for a tag via search
@@ -114,7 +136,10 @@ async function testConnection() {
 module.exports = {
   getAlbums,
   getAlbum,
+  createAlbum,
   getTags,
+  createTag,
+  tagAssets,
   getAssetsByTag,
   getAsset,
   proxyAssetThumbnail,

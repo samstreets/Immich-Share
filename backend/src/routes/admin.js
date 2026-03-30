@@ -1,7 +1,7 @@
 const express = require('express');
 const { getDb } = require('../db');
 const { requireAuth } = require('../middleware/auth');
-const { getAlbums, getAlbum, getTags, testConnection } = require('../immich');
+const { getAlbums, getAlbum, getTags, testConnection, createAlbum, createTag } = require('../immich');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -63,6 +63,20 @@ router.get('/immich/albums', async (req, res) => {
   }
 });
 
+// Create a new Immich album
+router.post('/immich/albums', async (req, res) => {
+  const { albumName, description } = req.body;
+  if (!albumName || !albumName.trim()) {
+    return res.status(400).json({ error: 'albumName is required' });
+  }
+  try {
+    const album = await createAlbum(albumName.trim(), description || '');
+    res.status(201).json(album);
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
 // Get Immich album details
 router.get('/immich/albums/:id', async (req, res) => {
   try {
@@ -78,6 +92,20 @@ router.get('/immich/tags', async (req, res) => {
   try {
     const tags = await getTags();
     res.json(tags);
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
+// Create a new Immich tag
+router.post('/immich/tags', async (req, res) => {
+  const { name } = req.body;
+  if (!name || !name.trim()) {
+    return res.status(400).json({ error: 'name is required' });
+  }
+  try {
+    const tag = await createTag(name.trim());
+    res.status(201).json(tag);
   } catch (err) {
     res.status(502).json({ error: err.message });
   }

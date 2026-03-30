@@ -36,6 +36,16 @@ function shareUrl(externalUrl, share) {
   return `${externalUrl}/s/${share.id}`;
 }
 
+/**
+ * Validate upload_tag_ids: comma-separated UUIDs (or empty).
+ * Returns normalized string or null.
+ */
+function cleanUploadTagIds(raw) {
+  if (!raw || !raw.trim()) return null;
+  const ids = raw.split(',').map(s => s.trim()).filter(Boolean);
+  return ids.length > 0 ? ids.join(',') : null;
+}
+
 // List all shares
 router.get('/', (req, res) => {
   const db = getDb();
@@ -63,8 +73,8 @@ router.get('/', (req, res) => {
 
   const shares = db.prepare(`
     SELECT id, slug, name, description, share_type, immich_album_id, immich_tag_id,
-           expires_at, allow_download, allow_upload, show_metadata, view_count,
-           created_at, updated_at, is_active
+           expires_at, allow_download, allow_upload, show_metadata, upload_tag_ids,
+           view_count, created_at, updated_at, is_active
     FROM shares ${where} ORDER BY created_at DESC
   `).all(...params);
 
@@ -95,7 +105,6 @@ router.get('/:id', (req, res) => {
 });
 
 // ── QR Code for share ─────────────────────────────────────────────────────────
-// GET /shares/:id/qr?size=256&dark=%23000&light=%23fff
 router.get('/:id/qr', (req, res) => {
   const db = getDb();
   const share = db.prepare('SELECT * FROM shares WHERE id = ?').get(req.params.id);
@@ -120,7 +129,6 @@ router.get('/:id/qr', (req, res) => {
 });
 
 // ── Per-share activity stats ──────────────────────────────────────────────────
-// GET /shares/:id/stats
 router.get('/:id/stats', (req, res) => {
   const db = getDb();
   const share = db.prepare('SELECT id, name FROM shares WHERE id = ?').get(req.params.id);
@@ -147,7 +155,6 @@ router.get('/:id/stats', (req, res) => {
 });
 
 // ── Bulk operations ───────────────────────────────────────────────────────────
-// POST /shares/bulk/delete  body: { ids: string[] }
 router.post('/bulk/delete', (req, res) => {
   const { ids } = req.body;
   if (!Array.isArray(ids) || ids.length === 0) {
@@ -159,7 +166,6 @@ router.post('/bulk/delete', (req, res) => {
   res.json({ deleted: result.changes });
 });
 
-// POST /shares/bulk/toggle  body: { ids: string[], is_active: boolean }
 router.post('/bulk/toggle', (req, res) => {
   const { ids, is_active } = req.body;
   if (!Array.isArray(ids) || ids.length === 0) {
@@ -186,6 +192,7 @@ router.post('/', async (req, res) => {
     allow_download,
     allow_upload,
     show_metadata,
+    upload_tag_ids: rawUploadTagIds,
     slug: rawSlug,
   } = req.body;
 
@@ -209,12 +216,12 @@ router.post('/', async (req, res) => {
     } catch (err) {
       return res.status(400).json({ error: err.message });
     }
-    // Check uniqueness
     const db2 = getDb();
     const existing = db2.prepare('SELECT id FROM shares WHERE slug = ?').get(slug);
     if (existing) return res.status(409).json({ error: `Slug "${slug}" is already taken` });
   }
 
+  const uploadTagIds = cleanUploadTagIds(rawUploadTagIds);
   const id = uuidv4();
   const passwordHash = await bcrypt.hash(password, 10);
   const db = getDb();
@@ -222,8 +229,8 @@ router.post('/', async (req, res) => {
   try {
     db.prepare(`
       INSERT INTO shares (id, slug, name, description, share_type, immich_album_id, immich_tag_id,
-        password_hash, expires_at, allow_download, allow_upload, show_metadata)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        password_hash, expires_at, allow_download, allow_upload, show_metadata, upload_tag_ids)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id, slug, name, description || null, share_type,
       immich_album_id || null,
@@ -232,7 +239,8 @@ router.post('/', async (req, res) => {
       expires_at || null,
       allow_download !== false ? 1 : 0,
       allow_upload ? 1 : 0,
-      show_metadata ? 1 : 0
+      show_metadata ? 1 : 0,
+      uploadTagIds
     );
   } catch (err) {
     if (err.message.includes('UNIQUE constraint failed: shares.slug')) {
@@ -255,6 +263,7 @@ router.patch('/:id', async (req, res) => {
   const {
     name, description, password, expires_at,
     allow_download, allow_upload, show_metadata, is_active,
+    upload_tag_ids: rawUploadTagIds,
     slug: rawSlug,
   } = req.body;
 
@@ -263,18 +272,16 @@ router.patch('/:id', async (req, res) => {
     passwordHash = await bcrypt.hash(password, 10);
   }
 
-  // Handle slug update
   let slug = share.slug;
   if (rawSlug !== undefined) {
     if (!rawSlug || !rawSlug.trim()) {
-      slug = null; // clear the slug
+      slug = null;
     } else {
       try {
         slug = cleanSlug(rawSlug);
       } catch (err) {
         return res.status(400).json({ error: err.message });
       }
-      // Check uniqueness (excluding self)
       const existing = db.prepare('SELECT id FROM shares WHERE slug = ? AND id != ?').get(slug, req.params.id);
       if (existing) return res.status(409).json({ error: `Slug "${slug}" is already taken` });
     }
@@ -287,6 +294,9 @@ router.patch('/:id', async (req, res) => {
   const updatedUpload      = allow_upload !== undefined ? (allow_upload ? 1 : 0) : share.allow_upload;
   const updatedMetadata    = show_metadata !== undefined ? (show_metadata ? 1 : 0) : share.show_metadata;
   const updatedActive      = is_active !== undefined ? (is_active ? 1 : 0) : share.is_active;
+  const updatedUploadTagIds = rawUploadTagIds !== undefined
+    ? cleanUploadTagIds(rawUploadTagIds)
+    : share.upload_tag_ids;
 
   try {
     db.prepare(`
@@ -299,12 +309,14 @@ router.patch('/:id', async (req, res) => {
         allow_download = ?,
         allow_upload = ?,
         show_metadata = ?,
+        upload_tag_ids = ?,
         is_active = ?,
         updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).run(
       slug, updatedName, updatedDescription, passwordHash,
-      updatedExpiresAt, updatedDownload, updatedUpload, updatedMetadata, updatedActive,
+      updatedExpiresAt, updatedDownload, updatedUpload, updatedMetadata,
+      updatedUploadTagIds, updatedActive,
       req.params.id
     );
   } catch (err) {
