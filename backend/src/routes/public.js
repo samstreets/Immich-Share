@@ -186,11 +186,10 @@ router.get('/zip/:id', async (req, res) => {
       }
 
       // Derive filename
-      const contentDisp = upstream.headers.get('content-disposition') || '';
-      let filename = asset.originalFileName || asset.id;
-      const cdMatch = contentDisp.match(/filename[^;=\n]*=(['"]?)([^'";\n]+)\1/i);
-      if (cdMatch) filename = cdMatch[2].trim();
-      filename = `${String(i + 1).padStart(4, '0')}_${filename}`;
+      // Derive filename — always prefer originalFileName we already fetched.
+      // The content-disposition header from Immich is often an opaque ID like "UFP-8".
+      let filename = asset.originalFileName || asset.id
+      filename = `${String(i + 1).padStart(4, '0')}_${filename}`
 
       const nameBytes = Buffer.from(filename, 'utf8');
       const dosTime = dosDateTime(new Date());
