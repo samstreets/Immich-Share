@@ -102,52 +102,204 @@ function PasswordGate({ shareInfo, onUnlock, dark }) {
 }
 
 // ── Download ZIP ──────────────────────────────────────────────────────────────
+// ── Download ZIP with streaming progress ─────────────────────────────────────
+// Drop-in replacement for DownloadZipButton in frontend/src/pages/ShareView.jsx
+//
+// HOW TO APPLY:
+// In ShareView.jsx, find the entire DownloadZipButton function (starts with
+// "function DownloadZipButton(" and ends before "// ── Chunked upload helpers")
+// and replace it with the code below.
+
 function DownloadZipButton({ shareId, sessionToken, assetCount, shareName }) {
-  const [state, setState] = useState('idle')
+  const [state, setState] = useState('idle')      // idle | downloading | done | error
+  const [progress, setProgress] = useState(0)     // 0-100
+  const [received, setReceived] = useState(0)     // bytes received
+  const [total, setTotal] = useState(0)           // bytes total (0 = unknown)
   const [errorMsg, setErrorMsg] = useState('')
+  const abortRef = useRef(null)
+
+  function formatBytes(b) {
+    if (b < 1024) return `${b} B`
+    if (b < 1024 * 1024) return `${(b / 1024).toFixed(0)} KB`
+    return `${(b / 1024 / 1024).toFixed(1)} MB`
+  }
 
   async function handleDownload() {
-    setState('downloading'); setErrorMsg('')
+    if (state === 'downloading') {
+      // Cancel
+      abortRef.current?.abort()
+      setState('idle')
+      setProgress(0)
+      setReceived(0)
+      setTotal(0)
+      return
+    }
+
+    setState('downloading')
+    setProgress(0)
+    setReceived(0)
+    setTotal(0)
+    setErrorMsg('')
+
+    const controller = new AbortController()
+    abortRef.current = controller
+
     try {
       const t = encodeURIComponent(sessionToken)
-      const res = await fetch(`/api/public/zip/${shareId}?t=${t}`)
-      if (!res.ok) { const text = await res.text(); throw new Error(text || `HTTP ${res.status}`) }
-      const blob = await res.blob()
+      const res = await fetch(`/api/public/zip/${shareId}?t=${t}`, {
+        signal: controller.signal,
+      })
+
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || `HTTP ${res.status}`)
+      }
+
+      const contentLength = parseInt(res.headers.get('content-length') || '0', 10)
+      setTotal(contentLength)
+
+      // Stream into a Blob via ReadableStream so we can track progress
+      const reader = res.body.getReader()
+      const chunks = []
+      let loaded = 0
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        chunks.push(value)
+        loaded += value.length
+        setReceived(loaded)
+        if (contentLength > 0) {
+          setProgress(Math.min(Math.round((loaded / contentLength) * 100), 99))
+        } else {
+          // Unknown total — pulse every ~5 MB
+          setProgress(prev => (prev >= 95 ? 10 : prev + 1))
+        }
+      }
+
+      setProgress(100)
+
+      const blob = new Blob(chunks, { type: 'application/zip' })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
       const safe = (shareName || 'share').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 60)
       a.download = `${safe}.zip`
-      document.body.appendChild(a); a.click(); document.body.removeChild(a)
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
       URL.revokeObjectURL(url)
-      setState('done'); setTimeout(() => setState('idle'), 3000)
+
+      setState('done')
+      setTimeout(() => { setState('idle'); setProgress(0); setReceived(0); setTotal(0) }, 3000)
     } catch (err) {
-      setErrorMsg(err.message); setState('error'); setTimeout(() => setState('idle'), 4000)
+      if (err.name === 'AbortError') return  // user cancelled
+      setErrorMsg(err.message)
+      setState('error')
+      setTimeout(() => { setState('idle'); setProgress(0) }, 4000)
     }
   }
 
-  const labels = { idle: `Download All (${assetCount})`, downloading: 'Preparing ZIP…', done: '✓ Downloaded!', error: `✗ ${errorMsg}` }
+  const isDownloading = state === 'downloading'
+  const isDone = state === 'done'
+  const isError = state === 'error'
+
+  const btnBg = isError
+    ? 'rgba(248,113,113,0.15)'
+    : isDone
+      ? 'rgba(74,222,128,0.15)'
+      : isDownloading
+        ? 'rgba(196,164,74,0.2)'
+        : 'rgba(255,255,255,0.1)'
+
+  const btnColor = isError
+    ? '#f87171'
+    : isDone
+      ? '#4ade80'
+      : isDownloading
+        ? '#c4a44a'
+        : 'rgba(255,255,255,0.8)'
+
+  const btnBorder = isError
+    ? '1px solid rgba(248,113,113,0.3)'
+    : isDone
+      ? '1px solid rgba(74,222,128,0.3)'
+      : isDownloading
+        ? '1px solid rgba(196,164,74,0.4)'
+        : '1px solid rgba(255,255,255,0.15)'
 
   return (
-    <button
-      onClick={handleDownload}
-      disabled={state === 'downloading'}
-      style={{
-        display: 'flex', alignItems: 'center', gap: 5,
-        padding: '6px 12px', borderRadius: 999, fontSize: '0.78rem', fontWeight: 600,
-        background: state === 'error' ? 'rgba(248,113,113,0.15)' : 'rgba(255,255,255,0.1)',
-        color: state === 'error' ? '#f87171' : 'rgba(255,255,255,0.8)',
-        border: state === 'error' ? '1px solid rgba(248,113,113,0.3)' : '1px solid rgba(255,255,255,0.15)',
-        cursor: state === 'downloading' ? 'not-allowed' : 'pointer',
-        fontFamily: 'inherit', transition: 'all 0.15s',
-      }}
-    >
-      {state === 'downloading'
-        ? <span style={{ width: 13, height: 13, border: '2px solid rgba(255,255,255,0.2)', borderTopColor: '#fff', borderRadius: '50%', animation: 'spin 0.6s linear infinite', display: 'inline-block' }} />
-        : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-      }
-      {labels[state]}
-    </button>
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+      <button
+        onClick={handleDownload}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 5,
+          padding: '6px 12px', borderRadius: 999, fontSize: '0.78rem', fontWeight: 600,
+          background: btnBg, color: btnColor, border: btnBorder,
+          cursor: 'pointer', fontFamily: 'inherit', transition: 'all 0.15s',
+          minWidth: 140, justifyContent: 'center',
+        }}
+      >
+        {isDownloading ? (
+          <>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="6" y="6" width="12" height="12" rx="2"/>
+            </svg>
+            Cancel
+          </>
+        ) : isDone ? (
+          <>✓ Downloaded!</>
+        ) : isError ? (
+          <>✗ {errorMsg.slice(0, 28)}{errorMsg.length > 28 ? '…' : ''}</>
+        ) : (
+          <>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="7 10 12 15 17 10"/>
+              <line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            Download All ({assetCount})
+          </>
+        )}
+      </button>
+
+      {/* Progress bar — only visible while downloading */}
+      {isDownloading && (
+        <div style={{ width: '100%', minWidth: 140 }}>
+          <div style={{
+            height: 3, borderRadius: 2,
+            background: 'rgba(255,255,255,0.1)',
+            overflow: 'hidden',
+          }}>
+            <div style={{
+              height: '100%',
+              width: total > 0 ? `${progress}%` : undefined,
+              background: 'linear-gradient(90deg, #c4a44a, #f5cc6c)',
+              borderRadius: 2,
+              transition: total > 0 ? 'width 0.3s ease' : undefined,
+              // Indeterminate pulse when content-length is unknown
+              animation: total === 0 ? 'zipPulse 1.4s ease-in-out infinite' : undefined,
+            }} />
+          </div>
+          <div style={{
+            fontSize: '0.65rem', color: 'rgba(255,255,255,0.4)',
+            marginTop: 3, textAlign: 'right', fontWeight: 600,
+          }}>
+            {total > 0
+              ? `${formatBytes(received)} / ${formatBytes(total)} · ${progress}%`
+              : `${formatBytes(received)} received…`}
+          </div>
+        </div>
+      )}
+
+      <style>{`
+        @keyframes zipPulse {
+          0%   { width: 5%;  margin-left: 0; }
+          50%  { width: 40%; margin-left: 30%; }
+          100% { width: 5%;  margin-left: 95%; }
+        }
+      `}</style>
+    </div>
   )
 }
 
