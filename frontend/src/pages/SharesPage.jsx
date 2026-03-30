@@ -270,7 +270,6 @@ function SlugPreview({ slug, externalUrl }) {
 
 // ── Inline create album/tag helper ────────────────────────────────────────────
 function InlineCreate({ type, onCreate, onCancel }) {
-  // type: 'album' | 'tag'
   const [name, setName] = useState('')
   const [desc, setDesc] = useState('')
   const [loading, setLoading] = useState(false)
@@ -293,7 +292,12 @@ function InlineCreate({ type, onCreate, onCancel }) {
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Failed')
+      // Call onCreate BEFORE clearing loading so parent can handle the new item
       onCreate(data)
+      // Reset form state after successful creation
+      setName('')
+      setDesc('')
+      setLoading(false)
     } catch (err) {
       setError(err.message)
       setLoading(false)
@@ -337,7 +341,7 @@ function InlineCreate({ type, onCreate, onCancel }) {
           <button type="submit" className="btn btn-primary btn-sm" disabled={loading || !name.trim()}>
             {loading ? <span className="loading-spinner" style={{ width: 11, height: 11 }} /> : `Create ${label}`}
           </button>
-          <button type="button" className="btn btn-ghost btn-sm" onClick={onCancel}>Cancel</button>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={onCancel} disabled={loading}>Cancel</button>
         </div>
       </form>
     </div>
@@ -405,6 +409,145 @@ function TagPicker({ tags, selectedIds, onChange, onRefresh }) {
   )
 }
 
+// ── Tag existing album assets panel ──────────────────────────────────────────
+function TagAlbumAssetsPanel({ shareId, albumId, tags, onRefresh }) {
+  const [selectedTagIds, setSelectedTagIds] = useState([])
+  const [status, setStatus] = useState(null) // null | 'loading' | { tagged: number, errors: number }
+  const [error, setError] = useState('')
+
+  function toggleTag(id) {
+    setSelectedTagIds(prev =>
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+    )
+  }
+
+  async function applyTags() {
+    if (!selectedTagIds.length) return
+    setStatus('loading')
+    setError('')
+    const token = localStorage.getItem('admin_token')
+
+    try {
+      // 1. Fetch album assets via admin endpoint
+      const albumRes = await fetch(`/api/admin/immich/albums/${albumId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!albumRes.ok) throw new Error('Could not fetch album assets')
+      const album = await albumRes.json()
+      const assetIds = (album.assets || []).map(a => a.id)
+
+      if (!assetIds.length) {
+        setStatus({ tagged: 0, errors: 0 })
+        return
+      }
+
+      // 2. Apply each tag to all assets
+      let errors = 0
+      for (const tagId of selectedTagIds) {
+        const tagRes = await fetch(`/api/admin/immich/tags/${tagId}/assets`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ ids: assetIds }),
+        })
+        if (!tagRes.ok) errors++
+      }
+
+      setStatus({ tagged: assetIds.length, errors, tagCount: selectedTagIds.length })
+    } catch (err) {
+      setError(err.message)
+      setStatus(null)
+    }
+  }
+
+  function handleTagCreated(tag) {
+    onRefresh(tag)
+    setSelectedTagIds(prev => [...prev, tag.id])
+  }
+
+  const [creatingTag, setCreatingTag] = useState(false)
+
+  return (
+    <div style={{
+      background: 'var(--bg3)', border: '1px solid var(--border)',
+      borderRadius: 'var(--radius-sm)', padding: '14px', marginTop: 4,
+    }}>
+      <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.05em', textTransform: 'uppercase', marginBottom: 10 }}>
+        Select tags to apply to all existing assets in this album
+      </div>
+
+      {error && (
+        <div style={{ fontSize: '0.75rem', color: 'var(--red)', marginBottom: 8, padding: '6px 10px', background: 'rgba(248,113,113,0.08)', borderRadius: 6, border: '1px solid rgba(248,113,113,0.2)' }}>
+          ⚠ {error}
+        </div>
+      )}
+
+      {status && status !== 'loading' && (
+        <div style={{ fontSize: '0.75rem', marginBottom: 10, padding: '6px 10px', borderRadius: 6,
+          background: status.errors ? 'rgba(251,191,36,0.08)' : 'rgba(74,222,128,0.08)',
+          border: `1px solid ${status.errors ? 'rgba(251,191,36,0.2)' : 'rgba(74,222,128,0.2)'}`,
+          color: status.errors ? 'var(--yellow)' : 'var(--green)',
+        }}>
+          ✓ Applied {status.tagCount} tag{status.tagCount !== 1 ? 's' : ''} to {status.tagged} asset{status.tagged !== 1 ? 's' : ''}
+          {status.errors > 0 && ` (${status.errors} tag${status.errors !== 1 ? 's' : ''} failed)`}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
+        {tags.length === 0
+          ? <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>No tags in Immich yet.</span>
+          : tags.map(tag => {
+              const id = tag.id
+              const label = tag.value ?? tag.name ?? id
+              const active = selectedTagIds.includes(id)
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => toggleTag(id)}
+                  style={{
+                    padding: '3px 11px', borderRadius: 999, fontSize: '0.75rem', fontWeight: 600,
+                    background: active ? 'var(--accent)' : 'var(--bg4, var(--bg))',
+                    color: active ? '#0d0a00' : 'var(--text-muted)',
+                    border: active ? '1px solid var(--accent)' : '1px solid var(--border)',
+                    cursor: 'pointer', fontFamily: 'inherit', transition: 'all 0.12s',
+                  }}
+                >
+                  {active && '✓ '}{label}
+                </button>
+              )
+            })
+        }
+      </div>
+
+      {creatingTag ? (
+        <InlineCreate type="tag" onCreate={handleTagCreated} onCancel={() => setCreatingTag(false)} />
+      ) : (
+        <button type="button" className="btn btn-ghost btn-sm" onClick={() => setCreatingTag(true)} style={{ marginBottom: 10 }}>
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          New tag in Immich
+        </button>
+      )}
+
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 4 }}>
+        <button
+          type="button"
+          className="btn btn-primary btn-sm"
+          disabled={!selectedTagIds.length || status === 'loading'}
+          onClick={applyTags}
+        >
+          {status === 'loading'
+            ? <><span className="loading-spinner" style={{ width: 11, height: 11 }} /> Applying…</>
+            : `Apply ${selectedTagIds.length ? `${selectedTagIds.length} ` : ''}tag${selectedTagIds.length !== 1 ? 's' : ''} to all assets`
+          }
+        </button>
+        {selectedTagIds.length > 0 && status !== 'loading' && (
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setSelectedTagIds([])}>Clear</button>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── Share form modal ──────────────────────────────────────────────────────────
 function ShareModal({ onClose, onSaved, editShare }) {
   const api = useApi()
@@ -413,9 +556,9 @@ function ShareModal({ onClose, onSaved, editShare }) {
   const [sourceLoading, setSourceLoading] = useState(false)
   const [externalUrl, setExternalUrl] = useState('')
 
-  // Inline create album state
   const [creatingAlbum, setCreatingAlbum] = useState(false)
   const [creatingTag, setCreatingTag] = useState(false)
+  const [showTagAlbumPanel, setShowTagAlbumPanel] = useState(false)
 
   const existingTagIds = editShare?.upload_tag_ids
     ? editShare.upload_tag_ids.split(',').map(s => s.trim()).filter(Boolean)
@@ -432,7 +575,7 @@ function ShareModal({ onClose, onSaved, editShare }) {
     allow_download: editShare?.allow_download !== false,
     allow_upload: editShare?.allow_upload || false,
     show_metadata: editShare?.show_metadata || false,
-    upload_tag_ids: existingTagIds,  // array of tag IDs to apply on upload
+    upload_tag_ids: existingTagIds,
     slug: editShare?.slug || '',
   })
   const [error, setError] = useState('')
@@ -453,22 +596,26 @@ function ShareModal({ onClose, onSaved, editShare }) {
 
   function set(key, val) { setForm(f => ({ ...f, [key]: val })) }
 
-  // Called when a new album is created inline
   function handleAlbumCreated(album) {
     setAlbums(prev => [album, ...prev])
     set('immich_album_id', album.id)
     setCreatingAlbum(false)
   }
 
-  // Called when a new tag is created inline (for share_type=tag selector)
   function handleTagCreated(tag) {
     setTags(prev => [tag, ...prev])
     set('immich_tag_id', tag.id)
     setCreatingTag(false)
   }
 
-  // Called when a new tag is created from the upload-tags picker
   function handleUploadTagRefresh(tag) {
+    setTags(prev => {
+      if (prev.find(t => t.id === tag.id)) return prev
+      return [tag, ...prev]
+    })
+  }
+
+  function handleTagAlbumRefresh(tag) {
     setTags(prev => {
       if (prev.find(t => t.id === tag.id)) return prev
       return [tag, ...prev]
@@ -537,6 +684,10 @@ function ShareModal({ onClose, onSaved, editShare }) {
       {label}
     </label>
   )
+
+  // Determine the album ID to use for the "tag existing assets" panel
+  const activeAlbumId = editShare?.immich_album_id || form.immich_album_id
+  const isAlbumType = (editShare?.share_type || form.share_type) === 'album'
 
   return (
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
@@ -663,6 +814,40 @@ function ShareModal({ onClose, onSaved, editShare }) {
                   </div>
                 )}
               </>
+            )}
+
+            {/* Tag existing album assets — available for album shares (new or edit) */}
+            {isAlbumType && activeAlbumId && (
+              <div className="form-group">
+                <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <span>
+                    Tag Existing Album Assets
+                    <span style={{ marginLeft: 8, padding: '1px 7px', borderRadius: 4, fontSize: '0.65rem', background: 'rgba(96,165,250,0.15)', color: 'var(--blue)', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' }}>bulk action</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setShowTagAlbumPanel(v => !v)}
+                    style={{
+                      background: 'none', border: 'none', cursor: 'pointer',
+                      color: showTagAlbumPanel ? 'var(--accent)' : 'var(--text-muted)',
+                      fontSize: '0.7rem', fontWeight: 700,
+                      display: 'flex', alignItems: 'center', gap: 4, fontFamily: 'inherit',
+                      padding: 0,
+                    }}
+                  >
+                    {showTagAlbumPanel ? '▲ Hide' : '▼ Show'}
+                  </button>
+                </label>
+                <span className="hint">Apply Immich tags to all photos already in this album.</span>
+                {showTagAlbumPanel && (
+                  <TagAlbumAssetsPanel
+                    shareId={editShare?.id}
+                    albumId={activeAlbumId}
+                    tags={tags}
+                    onRefresh={handleTagAlbumRefresh}
+                  />
+                )}
+              </div>
             )}
 
             {/* Password */}

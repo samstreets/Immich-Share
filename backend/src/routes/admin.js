@@ -1,7 +1,7 @@
 const express = require('express');
 const { getDb } = require('../db');
 const { requireAuth } = require('../middleware/auth');
-const { getAlbums, getAlbum, getTags, testConnection, createAlbum, createTag } = require('../immich');
+const { getAlbums, getAlbum, getTags, testConnection, createAlbum, createTag, tagAssets } = require('../immich');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -77,7 +77,7 @@ router.post('/immich/albums', async (req, res) => {
   }
 });
 
-// Get Immich album details
+// Get Immich album details (includes assets array)
 router.get('/immich/albums/:id', async (req, res) => {
   try {
     const album = await getAlbum(req.params.id);
@@ -111,6 +111,22 @@ router.post('/immich/tags', async (req, res) => {
   }
 });
 
+// Apply a tag to a list of assets  PUT /admin/immich/tags/:tagId/assets
+// Body: { ids: string[] }
+router.put('/immich/tags/:tagId/assets', async (req, res) => {
+  const { tagId } = req.params;
+  const { ids } = req.body;
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return res.status(400).json({ error: 'ids array required' });
+  }
+  try {
+    const result = await tagAssets(tagId, ids);
+    res.json(result);
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
 // Dashboard stats
 router.get('/stats', (req, res) => {
   const db = getDb();
@@ -125,13 +141,12 @@ router.get('/stats', (req, res) => {
 
 // ── Global access logs ────────────────────────────────────────────────────────
 
-// GET /admin/logs — paginated, filterable
 router.get('/logs', (req, res) => {
   const db = getDb();
   const limit  = Math.min(parseInt(req.query.limit  || '100', 10), 500);
   const offset = parseInt(req.query.offset || '0', 10);
-  const action = req.query.action || null;   // filter by action
-  const search = req.query.search || null;   // filter by share name / ip
+  const action = req.query.action || null;
+  const search = req.query.search || null;
 
   let where = '';
   const params = [];
@@ -172,7 +187,6 @@ router.get('/logs', (req, res) => {
   res.json({ logs: rows, total: totalRow.count, limit, offset });
 });
 
-// GET /admin/logs/summary — action breakdown + top shares
 router.get('/logs/summary', (req, res) => {
   const db = getDb();
 
@@ -210,7 +224,6 @@ router.get('/logs/summary', (req, res) => {
   res.json({ byAction, topShares, byDay });
 });
 
-// DELETE /admin/logs — purge all logs older than N days
 router.delete('/logs', (req, res) => {
   const db = getDb();
   const days = parseInt(req.query.days || '90', 10);
