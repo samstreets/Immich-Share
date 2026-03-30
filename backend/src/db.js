@@ -80,7 +80,7 @@ function initDb() {
     `);
   }
 
-  // Share access logs
+  // Share access logs (without CASCADE — will be migrated below if needed)
   db.exec(`
     CREATE TABLE IF NOT EXISTS access_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -94,7 +94,7 @@ function initDb() {
     )
   `);
 
-  // Migrate access_logs
+  // Migrate access_logs columns
   const logCols = db.prepare("PRAGMA table_info(access_logs)").all().map(c => c.name);
   if (!logCols.includes('action')) {
     db.exec(`ALTER TABLE access_logs ADD COLUMN action TEXT DEFAULT 'view'`);
@@ -103,18 +103,46 @@ function initDb() {
     db.exec(`ALTER TABLE access_logs ADD COLUMN share_name TEXT`);
   }
 
+  // Migrate: recreate access_logs with ON DELETE CASCADE if not already set.
+  // This ensures deleting a share automatically removes its logs and prevents
+  // the FOREIGN KEY constraint failures seen when shares are deleted.
+  const fkInfo = db.prepare("PRAGMA foreign_key_list(access_logs)").all();
+  const hasCascade = fkInfo.some(fk => fk.table === 'shares' && fk.on_delete === 'CASCADE');
+  if (!hasCascade) {
+    // Temporarily disable FK enforcement so we can drop and recreate the table
+    db.pragma('foreign_keys = OFF');
+    db.exec(`
+      CREATE TABLE access_logs_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        share_id TEXT NOT NULL,
+        share_name TEXT,
+        ip_address TEXT,
+        user_agent TEXT,
+        action TEXT DEFAULT 'view',
+        accessed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (share_id) REFERENCES shares(id) ON DELETE CASCADE
+      );
+      INSERT INTO access_logs_new
+        SELECT id, share_id, share_name, ip_address, user_agent, action, accessed_at
+        FROM access_logs
+        WHERE share_id IN (SELECT id FROM shares);
+      DROP TABLE access_logs;
+      ALTER TABLE access_logs_new RENAME TO access_logs;
+    `);
+    db.pragma('foreign_keys = ON');
+    console.log('✅ access_logs migrated to ON DELETE CASCADE');
+  }
+
   // Create default admin if none exists
   const adminCount = db.prepare('SELECT COUNT(*) as count FROM admin_users').get();
   if (adminCount.count === 0) {
-    // Use env var only on very first boot to set initial password, then it's DB-only
     const defaultPassword = process.env.ADMIN_PASSWORD || 'admin';
     const hash = bcrypt.hashSync(defaultPassword, 12);
     db.prepare('INSERT INTO admin_users (username, password_hash) VALUES (?, ?)').run('admin', hash);
     console.log(`✅ Default admin created (username: admin). Change the password in Settings immediately!`);
   }
 
-  // Default settings — all empty, user must configure via Settings UI
-  // Only fallback to env vars on first boot so existing deployments aren't broken
+  // Default settings — seed from env vars on first boot only
   const defaults = {
     immich_url: '',
     immich_api_key: '',
@@ -126,7 +154,6 @@ function initDb() {
   for (const [key, value] of Object.entries(defaults)) {
     const existing = db.prepare('SELECT key FROM settings WHERE key = ?').get(key);
     if (!existing) {
-      // On first boot, seed from env vars if present so existing deployments work
       let seedValue = value;
       if (key === 'immich_url' && process.env.IMMICH_URL) seedValue = process.env.IMMICH_URL;
       if (key === 'immich_api_key' && process.env.IMMICH_API_KEY) seedValue = process.env.IMMICH_API_KEY;
