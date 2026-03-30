@@ -8,6 +8,7 @@ A self-hosted web app that sits alongside your [Immich](https://immich.app) inst
 - 📁 **Album or asset shares** — share a whole Immich album or hand-pick assets
 - ⏱ **Expiry dates** — shares can auto-expire
 - ⬇ **Optional downloads** — control whether viewers can download originals
+- ⬆ **Optional uploads** — let viewers contribute photos back to the album
 - 🔗 **Custom external URL** — set the public URL used in share links
 - 🖼 **Lightbox viewer** — full-screen photo/video viewer with keyboard navigation
 - 📊 **Admin dashboard** — view stats, manage shares, test Immich connection
@@ -57,6 +58,25 @@ All settings can be configured via environment variables **or** the admin UI (Se
 3. Go to **API Keys** → **New API Key**
 4. Copy the key and paste it into the Settings page (or `.env`)
 
+### Required API Key Permissions
+
+Immich API keys are scoped per-user. The key you provide needs the following permissions — these map directly to what Immich Share calls on your behalf:
+
+| Permission | Why it's needed |
+|---|---|
+| `album.read` | List and browse albums in the share creation UI |
+| `asset.read` | Fetch asset metadata and serve thumbnails/previews/originals |
+| `asset.download` | Proxy original file downloads to share viewers |
+| `tag.read` | List tags so you can create tag-based shares |
+| `asset.upload` | Required only if you enable **Allow Uploads** on a share — lets viewers contribute photos back to Immich |
+| `album.addAsset` | Required only if you enable **Allow Uploads** — adds uploaded assets to the shared album |
+
+> **Minimum for read-only shares:** `album.read`, `asset.read`, `asset.download`, `tag.read`
+>
+> **For upload-enabled shares, also add:** `asset.upload`, `album.addAsset`
+
+> **Note:** If you are using an **admin** Immich account to generate the key, all permissions are granted by default and no scoping is required. Scoped permissions apply when generating a key from a non-admin account or when using Immich's fine-grained API key scopes (available in Immich v1.100+).
+
 ---
 
 ## Reverse Proxy (nginx example)
@@ -77,9 +97,6 @@ server {
         proxy_read_timeout 300s;
     }
 }
-```
-
-Set `EXTERNAL_URL=https://share.yourdomain.com` in your `.env`.
 
 ---
 
@@ -129,22 +146,7 @@ docker run -p 3000:3000 \
 
 ---
 
-## Architecture
 
-```
-Browser
-  │
-  ├── /admin/*        → React SPA (admin dashboard)
-  ├── /s/:shareId     → React SPA (public share viewer)
-  │
-  └── /api/*          → Express backend
-        ├── /auth          Login, password change
-        ├── /shares        CRUD for shares (admin)
-        ├── /admin         Settings, Immich browser, stats
-        ├── /public        Password verify, content fetch
-        └── /proxy         Media proxy (thumbnails, originals, video)
-              └── → Immich API
-```
 
 ---
 
