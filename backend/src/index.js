@@ -70,13 +70,15 @@ app.use('/api/public/verify', authLimiter);
 // a raw stream. Any body parser applied to that path will buffer the entire
 // file in memory and throw PayloadTooLarge for large files.
 const jsonParser = express.json({ limit: '10mb' });
-app.use('/api/auth',           jsonParser);
-app.use('/api/shares',         jsonParser);
-app.use('/api/admin',          jsonParser);
-app.use('/api/public/verify',  jsonParser);
-app.use('/api/public/info',    jsonParser);
-app.use('/api/public/content', jsonParser);
-// /api/public/upload is intentionally omitted -- raw multipart stream
+app.use('/api/auth',                   jsonParser);
+app.use('/api/shares',                 jsonParser);
+app.use('/api/admin',                  jsonParser);
+app.use('/api/public/verify',          jsonParser);
+app.use('/api/public/info',            jsonParser);
+app.use('/api/public/content',         jsonParser);
+app.use('/api/public/upload-assemble', jsonParser); // chunked upload assembly
+// /api/public/upload        -- intentionally omitted (raw multipart stream to Immich)
+// /api/public/upload-chunk  -- intentionally omitted (raw multipart, parsed manually)
 
 // Init database
 initDb();

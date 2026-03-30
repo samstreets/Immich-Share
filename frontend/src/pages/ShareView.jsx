@@ -151,10 +151,83 @@ function DownloadZipButton({ shareId, sessionToken, assetCount, shareName }) {
   )
 }
 
+// ── Chunked upload helpers ────────────────────────────────────────────────────
+const CHUNK_SIZE = 50 * 1024 * 1024 // 50 MB per chunk — well under Cloudflare's 100 MB limit
+
+function generateUploadId() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    const r = (Math.random() * 16) | 0
+    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16)
+  })
+}
+
+async function uploadFileChunked(file, shareId, sessionToken, onProgress) {
+  const uploadId = generateUploadId()
+  const totalChunks = Math.ceil(file.size / CHUNK_SIZE)
+  const t = encodeURIComponent(sessionToken)
+
+  // Upload each chunk
+  for (let i = 0; i < totalChunks; i++) {
+    const start = i * CHUNK_SIZE
+    const end = Math.min(start + CHUNK_SIZE, file.size)
+    const chunkBlob = file.slice(start, end)
+
+    const formData = new FormData()
+    formData.append('chunkData', chunkBlob, file.name)
+    formData.append('uploadId', uploadId)
+    formData.append('chunkIndex', String(i))
+    formData.append('totalChunks', String(totalChunks))
+    formData.append('filename', file.name)
+
+    let attempt = 0
+    while (attempt < 3) {
+      const res = await fetch(`/api/public/upload-chunk/${shareId}?t=${t}`, {
+        method: 'POST',
+        body: formData,
+      })
+      if (res.ok) break
+      attempt++
+      if (attempt >= 3) {
+        const text = await res.text().catch(() => `HTTP ${res.status}`)
+        // Ask server to clean up
+        await fetch(`/api/public/upload-chunk/${shareId}/${uploadId}?t=${t}`, { method: 'DELETE' }).catch(() => {})
+        return { success: false, error: `Chunk ${i + 1}/${totalChunks} failed after 3 attempts: ${text}` }
+      }
+      await new Promise(r => setTimeout(r, 500 * 2 ** attempt))
+    }
+
+    // Reserve last 15% for assembly step
+    onProgress(Math.round(((i + 1) / totalChunks) * 85))
+  }
+
+  // Assemble
+  onProgress(90)
+  const assembleRes = await fetch(`/api/public/upload-assemble/${shareId}?t=${t}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      uploadId,
+      filename: file.name,
+      deviceAssetId: `${file.name}-${file.size}-${file.lastModified}`,
+      fileCreatedAt: new Date(file.lastModified).toISOString(),
+      fileModifiedAt: new Date(file.lastModified).toISOString(),
+    }),
+  })
+
+  const assembleData = await assembleRes.json().catch(() => ({ error: `HTTP ${assembleRes.status}` }))
+  onProgress(100)
+
+  if (!assembleRes.ok) {
+    return { success: false, error: assembleData.error || 'Assembly failed' }
+  }
+  return { success: true, assetId: assembleData.assetId }
+}
+
 // ── Upload Panel ──────────────────────────────────────────────────────────────
 function UploadPanel({ shareId, sessionToken, onUploaded }) {
   const [files, setFiles] = useState([])
   const [uploading, setUploading] = useState(false)
+  const [progress, setProgress] = useState({}) // { [filename]: 0-100 }
   const [results, setResults] = useState([])
   const [dragOver, setDragOver] = useState(false)
   const inputRef = useRef()
@@ -172,37 +245,41 @@ function UploadPanel({ shareId, sessionToken, onUploaded }) {
 
   async function uploadAll() {
     if (!files.length) return
-    setUploading(true); setResults([])
+    setUploading(true)
+    setResults([])
+    setProgress({})
+
     const out = []
     for (const file of files) {
-      try {
-        const formData = new FormData()
-        formData.append('assetData', file, file.name)
-        formData.append('deviceAssetId', `${file.name}-${file.size}-${file.lastModified}`)
-        formData.append('deviceId', 'immich-share-upload')
-        formData.append('fileCreatedAt', new Date(file.lastModified).toISOString())
-        formData.append('fileModifiedAt', new Date(file.lastModified).toISOString())
-        const res = await fetch(`/api/public/upload/${shareId}?t=${encodeURIComponent(sessionToken)}`, { method: 'POST', body: formData })
-        const text = await res.text()
-        let data; try { data = JSON.parse(text) } catch { data = { error: text } }
-        out.push(res.ok && data.success ? { name: file.name, ok: true } : { name: file.name, ok: false, error: data.error || 'Upload failed' })
-      } catch (err) {
-        out.push({ name: file.name, ok: false, error: err.message })
-      }
+      setProgress(prev => ({ ...prev, [file.name]: 0 }))
+      const result = await uploadFileChunked(
+        file,
+        shareId,
+        sessionToken,
+        pct => setProgress(prev => ({ ...prev, [file.name]: pct })),
+      )
+      out.push({ name: file.name, ...result })
     }
-    setResults(out); setUploading(false)
-    if (out.some(r => r.ok)) { setFiles([]); setTimeout(onUploaded, 800) }
+
+    setResults(out)
+    setUploading(false)
+    if (out.some(r => r.success)) { setFiles([]); setTimeout(onUploaded, 800) }
   }
 
-  const successCount = results.filter(r => r.ok).length
-  const failCount = results.filter(r => !r.ok).length
+  const successCount = results.filter(r => r.success).length
+  const failCount = results.filter(r => !r.success).length
 
   return (
     <div style={{ background: 'rgba(255,255,255,0.05)', border: '1.5px solid rgba(255,255,255,0.1)', borderRadius: 12, padding: 20, marginBottom: 20 }}>
       <h3 style={{ fontSize: '0.9rem', fontWeight: 700, marginBottom: 14, display: 'flex', alignItems: 'center', gap: 8, color: 'rgba(255,255,255,0.9)' }}>
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-        Upload Photos & Videos
+        Upload Photos &amp; Videos
+        <span style={{ marginLeft: 'auto', fontSize: '0.68rem', color: 'rgba(255,255,255,0.3)', fontWeight: 500 }}>
+          chunked · no file size limit
+        </span>
       </h3>
+
+      {/* Drop zone */}
       <div
         onDragOver={e => { e.preventDefault(); setDragOver(true) }}
         onDragLeave={() => setDragOver(false)}
@@ -212,31 +289,72 @@ function UploadPanel({ shareId, sessionToken, onUploaded }) {
       >
         <div style={{ fontSize: '2rem', marginBottom: 8 }}>📷</div>
         <div style={{ fontSize: '0.875rem', color: 'rgba(255,255,255,0.5)', fontWeight: 500 }}>
-          Drop photos & videos or <span style={{ color: '#c4a44a', fontWeight: 700 }}>browse</span>
+          Drop photos &amp; videos or <span style={{ color: '#c4a44a', fontWeight: 700 }}>browse</span>
         </div>
-        <div style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.3)', marginTop: 5 }}>JPG, PNG, HEIC, MP4, MOV and more</div>
+        <div style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.3)', marginTop: 5 }}>
+          JPG, PNG, HEIC, MP4, MOV and more · large files split automatically
+        </div>
         <input ref={inputRef} type="file" multiple accept="image/*,video/*" style={{ display: 'none' }} onChange={e => addFiles(e.target.files)} />
       </div>
+
+      {/* File queue */}
       {files.length > 0 && (
         <div style={{ marginBottom: 12 }}>
-          <div style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.4)', marginBottom: 6, fontWeight: 600 }}>{files.length} file{files.length !== 1 ? 's' : ''} queued</div>
-          <div style={{ maxHeight: 130, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 3 }}>
-            {files.map((f, i) => (
-              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 10px', background: 'rgba(255,255,255,0.05)', borderRadius: 6, border: '1px solid rgba(255,255,255,0.08)', fontSize: '0.8rem' }}>
-                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'rgba(255,255,255,0.8)' }}>{f.type.startsWith('video/') ? '🎬 ' : '📷 '}{f.name}</span>
-                <span style={{ color: 'rgba(255,255,255,0.3)', flexShrink: 0, fontSize: '0.75rem' }}>{(f.size / 1024 / 1024).toFixed(1)} MB</span>
-                <button onClick={e => { e.stopPropagation(); removeFile(i) }} style={{ background: 'none', color: 'rgba(255,255,255,0.3)', fontSize: '0.9rem', padding: '0 2px', border: 'none', cursor: 'pointer', lineHeight: 1 }}>✕</button>
-              </div>
-            ))}
+          <div style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.4)', marginBottom: 6, fontWeight: 600 }}>
+            {files.length} file{files.length !== 1 ? 's' : ''} queued
+            <span style={{ marginLeft: 8, color: 'rgba(255,255,255,0.25)' }}>
+              ({(files.reduce((a, f) => a + f.size, 0) / 1024 / 1024).toFixed(1)} MB total)
+            </span>
+          </div>
+          <div style={{ maxHeight: 160, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {files.map((f, i) => {
+              const pct = progress[f.name]
+              const isUploading = uploading && pct !== undefined && pct < 100
+              const isDone = uploading && pct === 100
+              return (
+                <div key={i} style={{ padding: '6px 10px', background: 'rgba(255,255,255,0.05)', borderRadius: 6, border: '1px solid rgba(255,255,255,0.08)', fontSize: '0.8rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'rgba(255,255,255,0.8)' }}>
+                      {f.type.startsWith('video/') ? '🎬 ' : '📷 '}{f.name}
+                    </span>
+                    <span style={{ color: 'rgba(255,255,255,0.3)', flexShrink: 0, fontSize: '0.72rem' }}>
+                      {(f.size / 1024 / 1024).toFixed(1)} MB
+                      {f.size > CHUNK_SIZE && (
+                        <span style={{ marginLeft: 4, color: 'rgba(196,164,74,0.6)', fontSize: '0.68rem' }}>
+                          ({Math.ceil(f.size / CHUNK_SIZE)} chunks)
+                        </span>
+                      )}
+                    </span>
+                    {!uploading && (
+                      <button onClick={e => { e.stopPropagation(); removeFile(i) }} style={{ background: 'none', color: 'rgba(255,255,255,0.3)', fontSize: '0.9rem', padding: '0 2px', border: 'none', cursor: 'pointer', lineHeight: 1, flexShrink: 0 }}>✕</button>
+                    )}
+                    {isDone && <span style={{ color: '#4ade80', fontSize: '0.8rem', flexShrink: 0 }}>✓</span>}
+                  </div>
+                  {isUploading && (
+                    <div style={{ marginTop: 6 }}>
+                      <div style={{ height: 3, borderRadius: 2, background: 'rgba(255,255,255,0.1)', overflow: 'hidden' }}>
+                        <div style={{ height: '100%', width: `${pct}%`, background: 'linear-gradient(90deg, #c4a44a, #f5cc6c)', borderRadius: 2, transition: 'width 0.2s ease' }} />
+                      </div>
+                      <div style={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.3)', marginTop: 2 }}>
+                        {pct < 86 ? `Uploading… ${pct}%` : pct < 95 ? 'Assembling…' : 'Finalising…'}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
           </div>
         </div>
       )}
+
+      {/* Results */}
       {results.length > 0 && (
         <div style={{ marginBottom: 12 }}>
-          {successCount > 0 && <div style={{ background: 'rgba(74,222,128,0.1)', border: '1px solid rgba(74,222,128,0.2)', color: '#4ade80', padding: '9px 13px', borderRadius: 8, fontSize: '0.82rem', marginBottom: 6 }}>✓ {successCount} file{successCount !== 1 ? 's' : ''} uploaded</div>}
-          {failCount > 0 && <div style={{ background: 'rgba(248,113,113,0.1)', border: '1px solid rgba(248,113,113,0.2)', color: '#f87171', padding: '9px 13px', borderRadius: 8, fontSize: '0.82rem' }}>{results.filter(r => !r.ok).map((r, i) => <div key={i}>✗ {r.name}: {r.error}</div>)}</div>}
+          {successCount > 0 && <div style={{ background: 'rgba(74,222,128,0.1)', border: '1px solid rgba(74,222,128,0.2)', color: '#4ade80', padding: '9px 13px', borderRadius: 8, fontSize: '0.82rem', marginBottom: 6 }}>✓ {successCount} file{successCount !== 1 ? 's' : ''} uploaded successfully</div>}
+          {failCount > 0 && <div style={{ background: 'rgba(248,113,113,0.1)', border: '1px solid rgba(248,113,113,0.2)', color: '#f87171', padding: '9px 13px', borderRadius: 8, fontSize: '0.82rem' }}>{results.filter(r => !r.success).map((r, i) => <div key={i}>✗ {r.name}: {r.error}</div>)}</div>}
         </div>
       )}
+
       <button
         onClick={uploadAll}
         disabled={uploading || files.length === 0}
@@ -268,7 +386,6 @@ function LightBox({ asset, token, onClose, onPrev, onNext, total, index }) {
       style={{ position: 'fixed', inset: 0, background: 'rgba(6,8,16,0.97)', zIndex: 200, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}
       onClick={e => e.target === e.currentTarget && onClose()}
     >
-      {/* Top bar */}
       <div style={{ position: 'absolute', top: 0, left: 0, right: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 18px', background: 'linear-gradient(to bottom, rgba(6,8,16,0.8), transparent)', zIndex: 10 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <div style={{ width: 28, height: 28, borderRadius: 7, fontSize: '0.85rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>📷</div>
@@ -287,7 +404,6 @@ function LightBox({ asset, token, onClose, onPrev, onNext, total, index }) {
           </button>
         </div>
       </div>
-      {/* Arrows */}
       {total > 1 && (
         <>
           {[{ onClick: onPrev, style: { left: 14 }, icon: '‹' }, { onClick: onNext, style: { right: 14 }, icon: '›' }].map(({ onClick, style: s, icon }) => (
@@ -326,32 +442,21 @@ function GalleryControls({ viewMode, setViewMode, sortOrder, setSortOrder, typeF
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', borderBottom: '1px solid rgba(255,255,255,0.06)', flexWrap: 'wrap' }}>
-      {/* Count */}
       <span style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.35)', fontWeight: 600, marginRight: 4 }}>
         {filteredTotal < total ? `${filteredTotal} of ${total}` : total} items
       </span>
-
-      {/* Type filter */}
       <div style={{ display: 'flex', gap: 4, marginLeft: 'auto' }}>
         {[['all', 'All'], ['IMAGE', '🖼 Photos'], ['VIDEO', '🎬 Videos']].map(([val, label]) => (
           <button key={val} style={btnStyle(typeFilter === val)} onClick={() => setTypeFilter(val)}>{label}</button>
         ))}
       </div>
-
-      {/* Divider */}
       <div style={{ width: 1, height: 20, background: 'rgba(255,255,255,0.1)', margin: '0 4px' }} />
-
-      {/* Sort */}
       <div style={{ display: 'flex', gap: 4 }}>
         {[['newest', '↓ Newest'], ['oldest', '↑ Oldest']].map(([val, label]) => (
           <button key={val} style={btnStyle(sortOrder === val)} onClick={() => setSortOrder(val)}>{label}</button>
         ))}
       </div>
-
-      {/* Divider */}
       <div style={{ width: 1, height: 20, background: 'rgba(255,255,255,0.1)', margin: '0 4px' }} />
-
-      {/* View mode */}
       <div style={{ display: 'flex', gap: 4 }}>
         <button style={btnStyle(viewMode === 'grid')} onClick={() => setViewMode('grid')} title="Grid view">
           <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><rect x="0" y="0" width="6" height="6" rx="1"/><rect x="10" y="0" width="6" height="6" rx="1"/><rect x="0" y="10" width="6" height="6" rx="1"/><rect x="10" y="10" width="6" height="6" rx="1"/></svg>
@@ -360,8 +465,6 @@ function GalleryControls({ viewMode, setViewMode, sortOrder, setSortOrder, typeF
           <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2"><line x1="4" y1="3" x2="16" y2="3"/><line x1="4" y1="8" x2="16" y2="8"/><line x1="4" y1="13" x2="16" y2="13"/><circle cx="1" cy="3" r="1" fill="currentColor"/><circle cx="1" cy="8" r="1" fill="currentColor"/><circle cx="1" cy="13" r="1" fill="currentColor"/></svg>
         </button>
       </div>
-
-      {/* Theme toggle */}
       <button onClick={onThemeToggle} style={btnStyle(false)} title={dark ? 'Switch to light mode' : 'Switch to dark mode'}>
         {dark ? '☀️' : '🌙'}
       </button>
@@ -412,30 +515,16 @@ export default function ShareView() {
   const [lightbox, setLightbox] = useState(null)
   const [showUpload, setShowUpload] = useState(false)
 
-  // Gallery controls
   const [viewMode, setViewMode] = useState('grid')
   const [sortOrder, setSortOrder] = useState('newest')
   const [typeFilter, setTypeFilter] = useState('all')
 
-  // Derived assets list
   const displayedAssets = useMemo(() => {
     let list = [...assets]
     if (typeFilter !== 'all') list = list.filter(a => a.type === typeFilter)
     if (sortOrder === 'oldest') list = list.reverse()
     return list
   }, [assets, sortOrder, typeFilter])
-
-  // Dynamic CSS vars for light/dark mode in viewer
-  const viewerVars = dark ? {} : {
-    '--viewer-bg': '#f5f5f7',
-    '--viewer-header-bg': 'rgba(245,245,247,0.95)',
-    '--viewer-border': 'rgba(0,0,0,0.08)',
-    '--viewer-text': '#1a1a2e',
-    '--viewer-text-muted': '#6b7280',
-    '--viewer-card-bg': '#ffffff',
-    '--viewer-tile-bg': '#e5e7eb',
-    '--viewer-icon-color': 'rgba(0,0,0,0.5)',
-  }
 
   const bg = dark ? '#13161f' : '#f5f5f7'
   const headerBg = dark ? 'rgba(28,32,50,0.95)' : 'rgba(245,245,247,0.95)'
@@ -484,7 +573,6 @@ export default function ShareView() {
   const token = shareData?.sessionToken || ''
   const t = encodeURIComponent(token)
 
-  // Spinner component that works without CSS vars
   const Spinner = ({ size = 32 }) => (
     <div style={{ width: size, height: size, border: `${size/10}px solid rgba(196,164,74,0.2)`, borderTopColor: '#c4a44a', borderRadius: '50%', animation: 'spin 0.6s linear infinite' }} />
   )
@@ -596,12 +684,7 @@ export default function ShareView() {
           ))}
         </div>
       ) : (
-        <div style={{
-          padding: '4px',
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
-          gap: 3,
-        }}>
+        <div style={{ padding: '4px', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 3 }}>
           {displayedAssets.map((asset, i) => (
             <div key={asset.id} onClick={() => setLightbox(i)} style={{ aspectRatio: '1', overflow: 'hidden', cursor: 'pointer', background: tileBg, position: 'relative', borderRadius: 3 }}>
               <img
