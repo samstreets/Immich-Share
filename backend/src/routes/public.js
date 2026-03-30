@@ -309,11 +309,18 @@ router.post('/upload/:id', async (req, res) => {
     }
 
     if (share.share_type === 'album' && uploadData.id) {
-      await fetch(`${immichUrl}/api/albums/${share.immich_album_id}/assets`, {
+      const albumRes = await fetch(`${immichUrl}/api/albums/${share.immich_album_id}/assets`, {
         method: 'PUT',
         headers: { 'x-api-key': apiKey, 'Content-Type': 'application/json' },
         body: JSON.stringify({ ids: [uploadData.id] }),
       });
+      if (!albumRes.ok) {
+        const albumErr = await albumRes.text();
+        console.error(`[upload] Failed to add asset ${uploadData.id} to album ${share.immich_album_id}: ${albumRes.status} ${albumErr}`);
+      } else {
+        const albumData = await albumRes.json();
+        console.log(`[upload] Album add result:`, JSON.stringify(albumData));
+      }
     }
 
     logAccess(share, req, 'upload');
@@ -492,24 +499,48 @@ router.post('/upload-assemble/:id', async (req, res) => {
     });
 
     const uploadData = await uploadRes.json();
+    console.log(`[upload-assemble] Immich upload response (${uploadRes.status}):`, JSON.stringify(uploadData));
 
     if (!uploadRes.ok) {
       throw new Error(uploadData.message || `Immich responded with ${uploadRes.status}`);
     }
 
+    // Immich may return the existing asset id if it's a duplicate — use it either way
+    const assetId = uploadData.id;
+
+    if (!assetId) {
+      throw new Error('Immich did not return an asset ID. Response: ' + JSON.stringify(uploadData));
+    }
+
     // Add to album if applicable
-    if (share.share_type === 'album' && uploadData.id) {
-      await fetch(`${immichUrl}/api/albums/${share.immich_album_id}/assets`, {
+    if (share.share_type === 'album') {
+      const albumRes = await fetch(`${immichUrl}/api/albums/${share.immich_album_id}/assets`, {
         method: 'PUT',
         headers: { 'x-api-key': apiKey, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids: [uploadData.id] }),
+        body: JSON.stringify({ ids: [assetId] }),
       });
+
+      if (!albumRes.ok) {
+        const albumErr = await albumRes.text();
+        console.error(`[upload-assemble] Failed to add asset ${assetId} to album ${share.immich_album_id}: ${albumRes.status} ${albumErr}`);
+        // Upload succeeded but album add failed — tell the client
+        logAccess(share, req, 'upload');
+        return res.json({
+          success: true,
+          assetId,
+          warning: `File uploaded to Immich but could not be added to the album (HTTP ${albumRes.status}). Check server logs.`,
+        });
+      }
+
+      const albumData = await albumRes.json();
+      console.log(`[upload-assemble] Album add result:`, JSON.stringify(albumData));
     }
 
     logAccess(share, req, 'upload');
-    res.json({ success: true, assetId: uploadData.id });
+    res.json({ success: true, assetId });
 
   } catch (err) {
+    console.error('[upload-assemble] Error:', err.message);
     res.status(502).json({ error: `Assembly/upload failed: ${err.message}` });
   } finally {
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
