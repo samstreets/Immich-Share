@@ -11,6 +11,7 @@ const shareRoutes = require('./routes/shares');
 const adminRoutes = require('./routes/admin');
 const publicRoutes = require('./routes/public');
 const proxyRoutes = require('./routes/proxy');
+const { startWatcher } = require('./watcher');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -49,8 +50,6 @@ const limiter = rateLimit({
   max: 1000,
   standardHeaders: true,
   legacyHeaders: false,
-  // Skip rate limiting for upload endpoints — chunked uploads generate
-  // many requests per file and must not be throttled here.
   skip: (req) => {
     const p = req.path;
     return p.includes('/upload');
@@ -71,11 +70,6 @@ app.use('/api/', limiter);
 app.use('/api/auth/', authLimiter);
 app.use('/api/public/verify', authLimiter);
 
-// Body parsing -- applied per-prefix so the upload route is NEVER buffered.
-// IMPORTANT: Do NOT add a global express.json() or express.raw() here.
-// The upload handler at /api/public/upload pipes req directly to Immich as
-// a raw stream. Any body parser applied to that path will buffer the entire
-// file in memory and throw PayloadTooLarge for large files.
 const jsonParser = express.json({ limit: '10mb' });
 app.use('/api/auth',                   jsonParser);
 app.use('/api/shares',                 jsonParser);
@@ -83,12 +77,13 @@ app.use('/api/admin',                  jsonParser);
 app.use('/api/public/verify',          jsonParser);
 app.use('/api/public/info',            jsonParser);
 app.use('/api/public/content',         jsonParser);
-app.use('/api/public/upload-assemble', jsonParser); // chunked upload assembly
-// /api/public/upload        -- intentionally omitted (raw multipart stream to Immich)
-// /api/public/upload-chunk  -- intentionally omitted (raw multipart, parsed manually)
+app.use('/api/public/upload-assemble', jsonParser);
 
 // Init database
 initDb();
+
+// Start album watcher (auto-tags new assets in watched album shares)
+startWatcher();
 
 // API Routes
 app.use('/api/auth', authRoutes);

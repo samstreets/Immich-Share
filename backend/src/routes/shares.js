@@ -17,30 +17,27 @@ function getExternalUrl(db) {
 
 /**
  * Validate a custom slug: lowercase alphanumeric + hyphens, 3-60 chars.
- * Returns cleaned slug or throws.
  */
 function cleanSlug(raw) {
   const s = raw.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
   if (s.length < 3) throw new Error('Slug must be at least 3 characters');
   if (s.length > 60) throw new Error('Slug must be 60 characters or fewer');
   if (!/^[a-z0-9]/.test(s)) throw new Error('Slug must start with a letter or number');
-  // Reserve admin paths
   const reserved = ['admin', 'api', 's', 'login', 'share', 'shares'];
   if (reserved.includes(s)) throw new Error(`"${s}" is a reserved slug`);
   return s;
 }
 
 function shareUrl(externalUrl, share) {
-  // Prefer slug-based URL if slug is set
   if (share.slug) return `${externalUrl}/s/${share.slug}`;
   return `${externalUrl}/s/${share.id}`;
 }
 
 /**
- * Validate upload_tag_ids: comma-separated UUIDs (or empty).
+ * Validate tag IDs: comma-separated UUIDs (or empty).
  * Returns normalized string or null.
  */
-function cleanUploadTagIds(raw) {
+function cleanTagIds(raw) {
   if (!raw || !raw.trim()) return null;
   const ids = raw.split(',').map(s => s.trim()).filter(Boolean);
   return ids.length > 0 ? ids.join(',') : null;
@@ -73,7 +70,8 @@ router.get('/', (req, res) => {
 
   const shares = db.prepare(`
     SELECT id, slug, name, description, share_type, immich_album_id, immich_tag_id,
-           expires_at, allow_download, allow_upload, show_metadata, upload_tag_ids,
+           expires_at, allow_download, allow_upload, show_metadata,
+           upload_tag_ids, watch_tag_ids,
            view_count, created_at, updated_at, is_active
     FROM shares ${where} ORDER BY created_at DESC
   `).all(...params);
@@ -193,6 +191,7 @@ router.post('/', async (req, res) => {
     allow_upload,
     show_metadata,
     upload_tag_ids: rawUploadTagIds,
+    watch_tag_ids: rawWatchTagIds,
     slug: rawSlug,
   } = req.body;
 
@@ -221,7 +220,10 @@ router.post('/', async (req, res) => {
     if (existing) return res.status(409).json({ error: `Slug "${slug}" is already taken` });
   }
 
-  const uploadTagIds = cleanUploadTagIds(rawUploadTagIds);
+  const uploadTagIds = cleanTagIds(rawUploadTagIds);
+  // watch_tag_ids only makes sense for album shares
+  const watchTagIds = share_type === 'album' ? cleanTagIds(rawWatchTagIds) : null;
+
   const id = uuidv4();
   const passwordHash = await bcrypt.hash(password, 10);
   const db = getDb();
@@ -229,8 +231,9 @@ router.post('/', async (req, res) => {
   try {
     db.prepare(`
       INSERT INTO shares (id, slug, name, description, share_type, immich_album_id, immich_tag_id,
-        password_hash, expires_at, allow_download, allow_upload, show_metadata, upload_tag_ids)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        password_hash, expires_at, allow_download, allow_upload, show_metadata,
+        upload_tag_ids, watch_tag_ids)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id, slug, name, description || null, share_type,
       immich_album_id || null,
@@ -240,7 +243,8 @@ router.post('/', async (req, res) => {
       allow_download !== false ? 1 : 0,
       allow_upload ? 1 : 0,
       show_metadata ? 1 : 0,
-      uploadTagIds
+      uploadTagIds,
+      watchTagIds
     );
   } catch (err) {
     if (err.message.includes('UNIQUE constraint failed: shares.slug')) {
@@ -264,6 +268,7 @@ router.patch('/:id', async (req, res) => {
     name, description, password, expires_at,
     allow_download, allow_upload, show_metadata, is_active,
     upload_tag_ids: rawUploadTagIds,
+    watch_tag_ids: rawWatchTagIds,
     slug: rawSlug,
   } = req.body;
 
@@ -295,8 +300,12 @@ router.patch('/:id', async (req, res) => {
   const updatedMetadata    = show_metadata !== undefined ? (show_metadata ? 1 : 0) : share.show_metadata;
   const updatedActive      = is_active !== undefined ? (is_active ? 1 : 0) : share.is_active;
   const updatedUploadTagIds = rawUploadTagIds !== undefined
-    ? cleanUploadTagIds(rawUploadTagIds)
+    ? cleanTagIds(rawUploadTagIds)
     : share.upload_tag_ids;
+  // watch_tag_ids only applies to album shares; ignore for tag-type shares
+  const updatedWatchTagIds = share.share_type === 'album'
+    ? (rawWatchTagIds !== undefined ? cleanTagIds(rawWatchTagIds) : share.watch_tag_ids)
+    : null;
 
   try {
     db.prepare(`
@@ -310,13 +319,14 @@ router.patch('/:id', async (req, res) => {
         allow_upload = ?,
         show_metadata = ?,
         upload_tag_ids = ?,
+        watch_tag_ids = ?,
         is_active = ?,
         updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).run(
       slug, updatedName, updatedDescription, passwordHash,
       updatedExpiresAt, updatedDownload, updatedUpload, updatedMetadata,
-      updatedUploadTagIds, updatedActive,
+      updatedUploadTagIds, updatedWatchTagIds, updatedActive,
       req.params.id
     );
   } catch (err) {

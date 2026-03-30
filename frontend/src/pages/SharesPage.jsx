@@ -307,24 +307,35 @@ function InlineCreate({ type, onCreate, onCancel }) {
   const label = type === 'album' ? 'Album' : 'Tag'
   const placeholder = type === 'album' ? 'e.g. Summer 2024' : 'e.g. vacation'
 
+  // NOTE: intentionally NOT a <form> — this component is rendered inside ShareModal's
+  // <form>, and nested <form> tags are invalid HTML. Browsers silently drop the inner
+  // form element, so any submit button inside would fire the OUTER form instead.
+  // We handle Enter ourselves via onKeyDown.
+  function handleKey(e) {
+    if (e.key === 'Enter') { e.preventDefault(); submit(e); }
+    if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
+  }
+
   return (
-    <div style={{
-      background: 'var(--bg3)', border: '1px solid var(--accent)', borderRadius: 'var(--radius-sm)',
-      padding: '12px 14px', marginTop: 8, animation: 'slideDown 0.15s ease',
-    }}>
+    <div
+      style={{
+        background: 'var(--bg3)', border: '1px solid var(--accent)', borderRadius: 'var(--radius-sm)',
+        padding: '12px 14px', marginTop: 8, animation: 'slideDown 0.15s ease',
+      }}
+      onKeyDown={handleKey}
+    >
       <style>{`@keyframes slideDown { from { opacity:0; transform:translateY(-4px) } }`}</style>
       <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--accent)', letterSpacing: '0.05em', textTransform: 'uppercase', marginBottom: 10 }}>
         New Immich {label}
       </div>
       {error && <div style={{ fontSize: '0.75rem', color: 'var(--red)', marginBottom: 8 }}>⚠ {error}</div>}
-      <form onSubmit={submit}>
+      <div>
         <div style={{ marginBottom: type === 'album' ? 8 : 0 }}>
           <input
             value={name}
             onChange={e => setName(e.target.value)}
             placeholder={`${label} name — ${placeholder}`}
             autoFocus
-            required
             style={{ marginBottom: 0 }}
           />
         </div>
@@ -338,12 +349,12 @@ function InlineCreate({ type, onCreate, onCancel }) {
           </div>
         )}
         <div style={{ display: 'flex', gap: 7, marginTop: 10 }}>
-          <button type="submit" className="btn btn-primary btn-sm" disabled={loading || !name.trim()}>
+          <button type="button" className="btn btn-primary btn-sm" disabled={loading || !name.trim()} onClick={submit}>
             {loading ? <span className="loading-spinner" style={{ width: 11, height: 11 }} /> : `Create ${label}`}
           </button>
           <button type="button" className="btn btn-ghost btn-sm" onClick={onCancel} disabled={loading}>Cancel</button>
         </div>
-      </form>
+      </div>
     </div>
   )
 }
@@ -576,6 +587,9 @@ function ShareModal({ onClose, onSaved, editShare }) {
     allow_upload: editShare?.allow_upload || false,
     show_metadata: editShare?.show_metadata || false,
     upload_tag_ids: existingTagIds,
+    watch_tag_ids: editShare?.watch_tag_ids
+      ? editShare.watch_tag_ids.split(',').map(s => s.trim()).filter(Boolean)
+      : [],
     slug: editShare?.slug || '',
   })
   const [error, setError] = useState('')

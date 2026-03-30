@@ -67,6 +67,7 @@ function initDb() {
 
   // Migrate old schemas
   const cols = db.prepare("PRAGMA table_info(shares)").all().map(c => c.name);
+
   if (!cols.includes('immich_tag_id')) {
     db.exec(`ALTER TABLE shares ADD COLUMN immich_tag_id TEXT`);
   }
@@ -80,13 +81,22 @@ function initDb() {
       ON shares(slug) WHERE slug IS NOT NULL
     `);
   }
-  // NEW: upload_tag_ids — comma-separated Immich tag IDs applied on upload
   if (!cols.includes('upload_tag_ids')) {
     db.exec(`ALTER TABLE shares ADD COLUMN upload_tag_ids TEXT`);
     console.log('✅ shares.upload_tag_ids column added');
   }
+  // Auto-tag watcher: tags applied to NEW assets added to the album after share creation
+  if (!cols.includes('watch_tag_ids')) {
+    db.exec(`ALTER TABLE shares ADD COLUMN watch_tag_ids TEXT`);
+    console.log('✅ shares.watch_tag_ids column added');
+  }
+  // Stores JSON array of asset IDs seen on the last watcher run (used to detect new assets)
+  if (!cols.includes('watch_last_seen_ids')) {
+    db.exec(`ALTER TABLE shares ADD COLUMN watch_last_seen_ids TEXT`);
+    console.log('✅ shares.watch_last_seen_ids column added');
+  }
 
-  // Share access logs (without CASCADE — will be migrated below if needed)
+  // Share access logs
   db.exec(`
     CREATE TABLE IF NOT EXISTS access_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
