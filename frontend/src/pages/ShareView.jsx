@@ -507,7 +507,7 @@ export default function ShareView() {
 
   const [shareInfo, setShareInfo] = useState(null)
   const [infoLoading, setInfoLoading] = useState(true)
-  const [infoError, setInfoError] = useState('')
+  const [infoError, setIntoError] = useState('')
   const [shareData, setShareData] = useState(null)
   const [assets, setAssets] = useState([])
   const [assetsLoading, setAssetsLoading] = useState(false)
@@ -526,6 +526,36 @@ export default function ShareView() {
     return list
   }, [assets, sortOrder, typeFilter])
 
+  // ── Lightbox history management ───────────────────────────────────────────
+  // Push a history entry when the lightbox opens so the browser back button
+  // closes it instead of navigating away from the page.
+  const openLightbox = useCallback((index) => {
+    setLightbox(index)
+    window.history.pushState({ lightbox: true }, '')
+  }, [])
+
+  const closeLightbox = useCallback(() => {
+    setLightbox(prev => {
+      if (prev !== null && window.history.state?.lightbox) {
+        // Remove the history entry we pushed — this triggers popstate,
+        // but since we already set lightbox to null the handler is a no-op.
+        window.history.back()
+      }
+      return null
+    })
+  }, [])
+
+  // Handle the hardware/browser back button while lightbox is open
+  useEffect(() => {
+    function onPopState() {
+      // If the lightbox is open when back is pressed, close it.
+      // The history entry has already been popped at this point.
+      setLightbox(prev => prev !== null ? null : prev)
+    }
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
+  }, [])
+
   const bg = dark ? '#13161f' : '#f5f5f7'
   const headerBg = dark ? 'rgba(28,32,50,0.95)' : 'rgba(245,245,247,0.95)'
   const borderColor = dark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.1)'
@@ -539,7 +569,7 @@ export default function ShareView() {
         if (!ok || data.error) throw new Error(data.error || 'Share not found')
         setShareInfo(data)
       })
-      .catch(e => setInfoError(e.message))
+      .catch(e => setIntoError(e.message))
       .finally(() => setInfoLoading(false))
   }, [shareId])
 
@@ -680,13 +710,13 @@ export default function ShareView() {
       ) : viewMode === 'list' ? (
         <div style={{ maxWidth: 800, margin: '0 auto' }}>
           {displayedAssets.map((asset, i) => (
-            <ListItem key={asset.id} asset={asset} token={token} onClick={() => setLightbox(i)} />
+            <ListItem key={asset.id} asset={asset} token={token} onClick={() => openLightbox(i)} />
           ))}
         </div>
       ) : (
         <div style={{ padding: '4px', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 3 }}>
           {displayedAssets.map((asset, i) => (
-            <div key={asset.id} onClick={() => setLightbox(i)} style={{ aspectRatio: '1', overflow: 'hidden', cursor: 'pointer', background: tileBg, position: 'relative', borderRadius: 3 }}>
+            <div key={asset.id} onClick={() => openLightbox(i)} style={{ aspectRatio: '1', overflow: 'hidden', cursor: 'pointer', background: tileBg, position: 'relative', borderRadius: 3 }}>
               <img
                 src={`${asset.thumbnailUrl}?t=${t}`}
                 loading="lazy" alt=""
@@ -711,7 +741,7 @@ export default function ShareView() {
           token={token}
           index={lightbox}
           total={displayedAssets.length}
-          onClose={() => setLightbox(null)}
+          onClose={closeLightbox}
           onPrev={() => setLightbox(i => (i - 1 + displayedAssets.length) % displayedAssets.length)}
           onNext={() => setLightbox(i => (i + 1) % displayedAssets.length)}
         />
