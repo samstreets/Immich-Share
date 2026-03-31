@@ -10,7 +10,6 @@ async function safeFetch(url, options = {}) {
   return { ok: res.ok, status: res.status, data }
 }
 
-// ── Theme context ─────────────────────────────────────────────────────────────
 function useViewerTheme() {
   const [dark, setDark] = useState(() => {
     try { return localStorage.getItem('viewer_theme') !== 'light' }
@@ -24,7 +23,6 @@ function useViewerTheme() {
   return { dark, toggle }
 }
 
-// ── Password gate ─────────────────────────────────────────────────────────────
 function PasswordGate({ shareInfo, onUnlock, dark }) {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -101,20 +99,11 @@ function PasswordGate({ shareInfo, onUnlock, dark }) {
   )
 }
 
-// ── Download ZIP ──────────────────────────────────────────────────────────────
-// ── Download ZIP with streaming progress ─────────────────────────────────────
-// Drop-in replacement for DownloadZipButton in frontend/src/pages/ShareView.jsx
-//
-// HOW TO APPLY:
-// In ShareView.jsx, find the entire DownloadZipButton function (starts with
-// "function DownloadZipButton(" and ends before "// ── Chunked upload helpers")
-// and replace it with the code below.
-
 function DownloadZipButton({ shareId, sessionToken, assetCount, shareName }) {
-  const [state, setState] = useState('idle')      // idle | downloading | done | error
-  const [progress, setProgress] = useState(0)     // 0-100
-  const [received, setReceived] = useState(0)     // bytes received
-  const [total, setTotal] = useState(0)           // bytes total (0 = unknown)
+  const [state, setState] = useState('idle')
+  const [progress, setProgress] = useState(0)
+  const [received, setReceived] = useState(0)
+  const [total, setTotal] = useState(0)
   const [errorMsg, setErrorMsg] = useState('')
   const abortRef = useRef(null)
 
@@ -126,7 +115,6 @@ function DownloadZipButton({ shareId, sessionToken, assetCount, shareName }) {
 
   async function handleDownload() {
     if (state === 'downloading') {
-      // Cancel
       abortRef.current?.abort()
       setState('idle')
       setProgress(0)
@@ -158,7 +146,6 @@ function DownloadZipButton({ shareId, sessionToken, assetCount, shareName }) {
       const contentLength = parseInt(res.headers.get('content-length') || '0', 10)
       setTotal(contentLength)
 
-      // Stream into a Blob via ReadableStream so we can track progress
       const reader = res.body.getReader()
       const chunks = []
       let loaded = 0
@@ -172,7 +159,6 @@ function DownloadZipButton({ shareId, sessionToken, assetCount, shareName }) {
         if (contentLength > 0) {
           setProgress(Math.min(Math.round((loaded / contentLength) * 100), 99))
         } else {
-          // Unknown total — pulse every ~5 MB
           setProgress(prev => (prev >= 95 ? 10 : prev + 1))
         }
       }
@@ -193,7 +179,7 @@ function DownloadZipButton({ shareId, sessionToken, assetCount, shareName }) {
       setState('done')
       setTimeout(() => { setState('idle'); setProgress(0); setReceived(0); setTotal(0) }, 3000)
     } catch (err) {
-      if (err.name === 'AbortError') return  // user cancelled
+      if (err.name === 'AbortError') return
       setErrorMsg(err.message)
       setState('error')
       setTimeout(() => { setState('idle'); setProgress(0) }, 4000)
@@ -204,29 +190,9 @@ function DownloadZipButton({ shareId, sessionToken, assetCount, shareName }) {
   const isDone = state === 'done'
   const isError = state === 'error'
 
-  const btnBg = isError
-    ? 'rgba(248,113,113,0.15)'
-    : isDone
-      ? 'rgba(74,222,128,0.15)'
-      : isDownloading
-        ? 'rgba(196,164,74,0.2)'
-        : 'rgba(255,255,255,0.1)'
-
-  const btnColor = isError
-    ? '#f87171'
-    : isDone
-      ? '#4ade80'
-      : isDownloading
-        ? '#c4a44a'
-        : 'rgba(255,255,255,0.8)'
-
-  const btnBorder = isError
-    ? '1px solid rgba(248,113,113,0.3)'
-    : isDone
-      ? '1px solid rgba(74,222,128,0.3)'
-      : isDownloading
-        ? '1px solid rgba(196,164,74,0.4)'
-        : '1px solid rgba(255,255,255,0.15)'
+  const btnBg = isError ? 'rgba(248,113,113,0.15)' : isDone ? 'rgba(74,222,128,0.15)' : isDownloading ? 'rgba(196,164,74,0.2)' : 'rgba(255,255,255,0.1)'
+  const btnColor = isError ? '#f87171' : isDone ? '#4ade80' : isDownloading ? '#c4a44a' : 'rgba(255,255,255,0.8)'
+  const btnBorder = isError ? '1px solid rgba(248,113,113,0.3)' : isDone ? '1px solid rgba(74,222,128,0.3)' : isDownloading ? '1px solid rgba(196,164,74,0.4)' : '1px solid rgba(255,255,255,0.15)'
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
@@ -241,70 +207,27 @@ function DownloadZipButton({ shareId, sessionToken, assetCount, shareName }) {
         }}
       >
         {isDownloading ? (
-          <>
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="6" y="6" width="12" height="12" rx="2"/>
-            </svg>
-            Cancel
-          </>
-        ) : isDone ? (
-          <>✓ Downloaded!</>
-        ) : isError ? (
-          <>✗ {errorMsg.slice(0, 28)}{errorMsg.length > 28 ? '…' : ''}</>
-        ) : (
-          <>
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-              <polyline points="7 10 12 15 17 10"/>
-              <line x1="12" y1="15" x2="12" y2="3"/>
-            </svg>
-            Download All ({assetCount})
-          </>
+          <><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>Cancel</>
+        ) : isDone ? <>✓ Downloaded!</> : isError ? <>✗ {errorMsg.slice(0, 28)}{errorMsg.length > 28 ? '…' : ''}</> : (
+          <><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Download All ({assetCount})</>
         )}
       </button>
-
-      {/* Progress bar — only visible while downloading */}
       {isDownloading && (
         <div style={{ width: '100%', minWidth: 140 }}>
-          <div style={{
-            height: 3, borderRadius: 2,
-            background: 'rgba(255,255,255,0.1)',
-            overflow: 'hidden',
-          }}>
-            <div style={{
-              height: '100%',
-              width: total > 0 ? `${progress}%` : undefined,
-              background: 'linear-gradient(90deg, #c4a44a, #f5cc6c)',
-              borderRadius: 2,
-              transition: total > 0 ? 'width 0.3s ease' : undefined,
-              // Indeterminate pulse when content-length is unknown
-              animation: total === 0 ? 'zipPulse 1.4s ease-in-out infinite' : undefined,
-            }} />
+          <div style={{ height: 3, borderRadius: 2, background: 'rgba(255,255,255,0.1)', overflow: 'hidden' }}>
+            <div style={{ height: '100%', width: total > 0 ? `${progress}%` : undefined, background: 'linear-gradient(90deg, #c4a44a, #f5cc6c)', borderRadius: 2, transition: total > 0 ? 'width 0.3s ease' : undefined, animation: total === 0 ? 'zipPulse 1.4s ease-in-out infinite' : undefined }} />
           </div>
-          <div style={{
-            fontSize: '0.65rem', color: 'rgba(255,255,255,0.4)',
-            marginTop: 3, textAlign: 'right', fontWeight: 600,
-          }}>
-            {total > 0
-              ? `${formatBytes(received)} / ${formatBytes(total)} · ${progress}%`
-              : `${formatBytes(received)} received…`}
+          <div style={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.4)', marginTop: 3, textAlign: 'right', fontWeight: 600 }}>
+            {total > 0 ? `${formatBytes(received)} / ${formatBytes(total)} · ${progress}%` : `${formatBytes(received)} received…`}
           </div>
         </div>
       )}
-
-      <style>{`
-        @keyframes zipPulse {
-          0%   { width: 5%;  margin-left: 0; }
-          50%  { width: 40%; margin-left: 30%; }
-          100% { width: 5%;  margin-left: 95%; }
-        }
-      `}</style>
+      <style>{`@keyframes zipPulse { 0% { width: 5%; margin-left: 0; } 50% { width: 40%; margin-left: 30%; } 100% { width: 5%; margin-left: 95%; } }`}</style>
     </div>
   )
 }
 
-// ── Chunked upload helpers ────────────────────────────────────────────────────
-const CHUNK_SIZE = 50 * 1024 * 1024 // 50 MB per chunk — well under Cloudflare's 100 MB limit
+const CHUNK_SIZE = 50 * 1024 * 1024
 
 function generateUploadId() {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
@@ -318,7 +241,6 @@ async function uploadFileChunked(file, shareId, sessionToken, onProgress) {
   const totalChunks = Math.ceil(file.size / CHUNK_SIZE)
   const t = encodeURIComponent(sessionToken)
 
-  // Upload each chunk
   for (let i = 0; i < totalChunks; i++) {
     const start = i * CHUNK_SIZE
     const end = Math.min(start + CHUNK_SIZE, file.size)
@@ -333,26 +255,19 @@ async function uploadFileChunked(file, shareId, sessionToken, onProgress) {
 
     let attempt = 0
     while (attempt < 3) {
-      const res = await fetch(`/api/public/upload-chunk/${shareId}?t=${t}`, {
-        method: 'POST',
-        body: formData,
-      })
+      const res = await fetch(`/api/public/upload-chunk/${shareId}?t=${t}`, { method: 'POST', body: formData })
       if (res.ok) break
       attempt++
       if (attempt >= 3) {
         const text = await res.text().catch(() => `HTTP ${res.status}`)
-        // Ask server to clean up
         await fetch(`/api/public/upload-chunk/${shareId}/${uploadId}?t=${t}`, { method: 'DELETE' }).catch(() => {})
         return { success: false, error: `Chunk ${i + 1}/${totalChunks} failed after 3 attempts: ${text}` }
       }
       await new Promise(r => setTimeout(r, 500 * 2 ** attempt))
     }
-
-    // Reserve last 15% for assembly step
     onProgress(Math.round(((i + 1) / totalChunks) * 85))
   }
 
-  // Assemble
   onProgress(90)
   const assembleRes = await fetch(`/api/public/upload-assemble/${shareId}?t=${t}`, {
     method: 'POST',
@@ -369,17 +284,14 @@ async function uploadFileChunked(file, shareId, sessionToken, onProgress) {
   const assembleData = await assembleRes.json().catch(() => ({ error: `HTTP ${assembleRes.status}` }))
   onProgress(100)
 
-  if (!assembleRes.ok) {
-    return { success: false, error: assembleData.error || 'Assembly failed' }
-  }
+  if (!assembleRes.ok) return { success: false, error: assembleData.error || 'Assembly failed' }
   return { success: true, assetId: assembleData.assetId }
 }
 
-// ── Upload Panel ──────────────────────────────────────────────────────────────
 function UploadPanel({ shareId, sessionToken, onUploaded }) {
   const [files, setFiles] = useState([])
   const [uploading, setUploading] = useState(false)
-  const [progress, setProgress] = useState({}) // { [filename]: 0-100 }
+  const [progress, setProgress] = useState({})
   const [results, setResults] = useState([])
   const [dragOver, setDragOver] = useState(false)
   const inputRef = useRef()
@@ -404,12 +316,7 @@ function UploadPanel({ shareId, sessionToken, onUploaded }) {
     const out = []
     for (const file of files) {
       setProgress(prev => ({ ...prev, [file.name]: 0 }))
-      const result = await uploadFileChunked(
-        file,
-        shareId,
-        sessionToken,
-        pct => setProgress(prev => ({ ...prev, [file.name]: pct })),
-      )
+      const result = await uploadFileChunked(file, shareId, sessionToken, pct => setProgress(prev => ({ ...prev, [file.name]: pct })))
       out.push({ name: file.name, ...result })
     }
 
@@ -426,12 +333,8 @@ function UploadPanel({ shareId, sessionToken, onUploaded }) {
       <h3 style={{ fontSize: '0.9rem', fontWeight: 700, marginBottom: 14, display: 'flex', alignItems: 'center', gap: 8, color: 'rgba(255,255,255,0.9)' }}>
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
         Upload Photos &amp; Videos
-        <span style={{ marginLeft: 'auto', fontSize: '0.68rem', color: 'rgba(255,255,255,0.3)', fontWeight: 500 }}>
-          chunked · no file size limit
-        </span>
+        <span style={{ marginLeft: 'auto', fontSize: '0.68rem', color: 'rgba(255,255,255,0.3)', fontWeight: 500 }}>chunked · no file size limit</span>
       </h3>
-
-      {/* Drop zone */}
       <div
         onDragOver={e => { e.preventDefault(); setDragOver(true) }}
         onDragLeave={() => setDragOver(false)}
@@ -440,23 +343,15 @@ function UploadPanel({ shareId, sessionToken, onUploaded }) {
         style={{ border: `2px dashed ${dragOver ? '#c4a44a' : 'rgba(255,255,255,0.2)'}`, borderRadius: 8, padding: '28px 16px', textAlign: 'center', cursor: 'pointer', background: dragOver ? 'rgba(196,164,74,0.08)' : 'rgba(255,255,255,0.03)', transition: 'all 0.15s', marginBottom: 12 }}
       >
         <div style={{ fontSize: '2rem', marginBottom: 8 }}>📷</div>
-        <div style={{ fontSize: '0.875rem', color: 'rgba(255,255,255,0.5)', fontWeight: 500 }}>
-          Drop photos &amp; videos or <span style={{ color: '#c4a44a', fontWeight: 700 }}>browse</span>
-        </div>
-        <div style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.3)', marginTop: 5 }}>
-          JPG, PNG, HEIC, MP4, MOV and more · large files split automatically
-        </div>
+        <div style={{ fontSize: '0.875rem', color: 'rgba(255,255,255,0.5)', fontWeight: 500 }}>Drop photos &amp; videos or <span style={{ color: '#c4a44a', fontWeight: 700 }}>browse</span></div>
+        <div style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.3)', marginTop: 5 }}>JPG, PNG, HEIC, MP4, MOV and more · large files split automatically</div>
         <input ref={inputRef} type="file" multiple accept="image/*,video/*" style={{ display: 'none' }} onChange={e => addFiles(e.target.files)} />
       </div>
-
-      {/* File queue */}
       {files.length > 0 && (
         <div style={{ marginBottom: 12 }}>
           <div style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.4)', marginBottom: 6, fontWeight: 600 }}>
             {files.length} file{files.length !== 1 ? 's' : ''} queued
-            <span style={{ marginLeft: 8, color: 'rgba(255,255,255,0.25)' }}>
-              ({(files.reduce((a, f) => a + f.size, 0) / 1024 / 1024).toFixed(1)} MB total)
-            </span>
+            <span style={{ marginLeft: 8, color: 'rgba(255,255,255,0.25)' }}>({(files.reduce((a, f) => a + f.size, 0) / 1024 / 1024).toFixed(1)} MB total)</span>
           </div>
           <div style={{ maxHeight: 160, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
             {files.map((f, i) => {
@@ -466,20 +361,9 @@ function UploadPanel({ shareId, sessionToken, onUploaded }) {
               return (
                 <div key={i} style={{ padding: '6px 10px', background: 'rgba(255,255,255,0.05)', borderRadius: 6, border: '1px solid rgba(255,255,255,0.08)', fontSize: '0.8rem' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'rgba(255,255,255,0.8)' }}>
-                      {f.type.startsWith('video/') ? '🎬 ' : '📷 '}{f.name}
-                    </span>
-                    <span style={{ color: 'rgba(255,255,255,0.3)', flexShrink: 0, fontSize: '0.72rem' }}>
-                      {(f.size / 1024 / 1024).toFixed(1)} MB
-                      {f.size > CHUNK_SIZE && (
-                        <span style={{ marginLeft: 4, color: 'rgba(196,164,74,0.6)', fontSize: '0.68rem' }}>
-                          ({Math.ceil(f.size / CHUNK_SIZE)} chunks)
-                        </span>
-                      )}
-                    </span>
-                    {!uploading && (
-                      <button onClick={e => { e.stopPropagation(); removeFile(i) }} style={{ background: 'none', color: 'rgba(255,255,255,0.3)', fontSize: '0.9rem', padding: '0 2px', border: 'none', cursor: 'pointer', lineHeight: 1, flexShrink: 0 }}>✕</button>
-                    )}
+                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'rgba(255,255,255,0.8)' }}>{f.type.startsWith('video/') ? '🎬 ' : '📷 '}{f.name}</span>
+                    <span style={{ color: 'rgba(255,255,255,0.3)', flexShrink: 0, fontSize: '0.72rem' }}>{(f.size / 1024 / 1024).toFixed(1)} MB{f.size > CHUNK_SIZE && <span style={{ marginLeft: 4, color: 'rgba(196,164,74,0.6)', fontSize: '0.68rem' }}>({Math.ceil(f.size / CHUNK_SIZE)} chunks)</span>}</span>
+                    {!uploading && <button onClick={e => { e.stopPropagation(); removeFile(i) }} style={{ background: 'none', color: 'rgba(255,255,255,0.3)', fontSize: '0.9rem', padding: '0 2px', border: 'none', cursor: 'pointer', lineHeight: 1, flexShrink: 0 }}>✕</button>}
                     {isDone && <span style={{ color: '#4ade80', fontSize: '0.8rem', flexShrink: 0 }}>✓</span>}
                   </div>
                   {isUploading && (
@@ -487,9 +371,7 @@ function UploadPanel({ shareId, sessionToken, onUploaded }) {
                       <div style={{ height: 3, borderRadius: 2, background: 'rgba(255,255,255,0.1)', overflow: 'hidden' }}>
                         <div style={{ height: '100%', width: `${pct}%`, background: 'linear-gradient(90deg, #c4a44a, #f5cc6c)', borderRadius: 2, transition: 'width 0.2s ease' }} />
                       </div>
-                      <div style={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.3)', marginTop: 2 }}>
-                        {pct < 86 ? `Uploading… ${pct}%` : pct < 95 ? 'Assembling…' : 'Finalising…'}
-                      </div>
+                      <div style={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.3)', marginTop: 2 }}>{pct < 86 ? `Uploading… ${pct}%` : pct < 95 ? 'Assembling…' : 'Finalising…'}</div>
                     </div>
                   )}
                 </div>
@@ -498,15 +380,12 @@ function UploadPanel({ shareId, sessionToken, onUploaded }) {
           </div>
         </div>
       )}
-
-      {/* Results */}
       {results.length > 0 && (
         <div style={{ marginBottom: 12 }}>
           {successCount > 0 && <div style={{ background: 'rgba(74,222,128,0.1)', border: '1px solid rgba(74,222,128,0.2)', color: '#4ade80', padding: '9px 13px', borderRadius: 8, fontSize: '0.82rem', marginBottom: 6 }}>✓ {successCount} file{successCount !== 1 ? 's' : ''} uploaded successfully</div>}
           {failCount > 0 && <div style={{ background: 'rgba(248,113,113,0.1)', border: '1px solid rgba(248,113,113,0.2)', color: '#f87171', padding: '9px 13px', borderRadius: 8, fontSize: '0.82rem' }}>{results.filter(r => !r.success).map((r, i) => <div key={i}>✗ {r.name}: {r.error}</div>)}</div>}
         </div>
       )}
-
       <button
         onClick={uploadAll}
         disabled={uploading || files.length === 0}
@@ -518,7 +397,6 @@ function UploadPanel({ shareId, sessionToken, onUploaded }) {
   )
 }
 
-// ── Lightbox ──────────────────────────────────────────────────────────────────
 function LightBox({ asset, token, onClose, onPrev, onNext, total, index }) {
   useEffect(() => {
     function onKey(e) {
@@ -582,7 +460,6 @@ function LightBox({ asset, token, onClose, onPrev, onNext, total, index }) {
   )
 }
 
-// ── Gallery controls bar ──────────────────────────────────────────────────────
 function GalleryControls({ viewMode, setViewMode, sortOrder, setSortOrder, typeFilter, setTypeFilter, total, filteredTotal, dark, onThemeToggle }) {
   const btnStyle = (active) => ({
     padding: '5px 10px', borderRadius: 6, fontSize: '0.75rem', fontWeight: 600,
@@ -624,7 +501,6 @@ function GalleryControls({ viewMode, setViewMode, sortOrder, setSortOrder, typeF
   )
 }
 
-// ── List view item ────────────────────────────────────────────────────────────
 function ListItem({ asset, token, onClick }) {
   const t = encodeURIComponent(token)
   return (
@@ -636,23 +512,14 @@ function ListItem({ asset, token, onClick }) {
         <img src={`${asset.thumbnailUrl}?t=${t}`} alt="" loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'rgba(255,255,255,0.85)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {asset.originalFileName || asset.id}
-        </div>
-        {asset.fileCreatedAt && (
-          <div style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.35)', marginTop: 2 }}>
-            {new Date(asset.fileCreatedAt).toLocaleDateString(undefined, { dateStyle: 'medium' })}
-          </div>
-        )}
+        <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'rgba(255,255,255,0.85)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{asset.originalFileName || asset.id}</div>
+        {asset.fileCreatedAt && <div style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.35)', marginTop: 2 }}>{new Date(asset.fileCreatedAt).toLocaleDateString(undefined, { dateStyle: 'medium' })}</div>}
       </div>
-      <div style={{ fontSize: '0.72rem', fontWeight: 600, color: 'rgba(255,255,255,0.3)', padding: '2px 8px', borderRadius: 99, background: 'rgba(255,255,255,0.07)' }}>
-        {asset.type === 'VIDEO' ? '🎬 video' : '🖼 photo'}
-      </div>
+      <div style={{ fontSize: '0.72rem', fontWeight: 600, color: 'rgba(255,255,255,0.3)', padding: '2px 8px', borderRadius: 99, background: 'rgba(255,255,255,0.07)' }}>{asset.type === 'VIDEO' ? '🎬 video' : '🖼 photo'}</div>
     </div>
   )
 }
 
-// ── Main share view ───────────────────────────────────────────────────────────
 export default function ShareView() {
   const { shareId } = useParams()
   const { dark, toggle: toggleTheme } = useViewerTheme()
@@ -678,9 +545,6 @@ export default function ShareView() {
     return list
   }, [assets, sortOrder, typeFilter])
 
-  // ── Lightbox history management ───────────────────────────────────────────
-  // Push a history entry when the lightbox opens so the browser back button
-  // closes it instead of navigating away from the page.
   const openLightbox = useCallback((index) => {
     setLightbox(index)
     window.history.pushState({ lightbox: true }, '')
@@ -689,19 +553,14 @@ export default function ShareView() {
   const closeLightbox = useCallback(() => {
     setLightbox(prev => {
       if (prev !== null && window.history.state?.lightbox) {
-        // Remove the history entry we pushed — this triggers popstate,
-        // but since we already set lightbox to null the handler is a no-op.
         window.history.back()
       }
       return null
     })
   }, [])
 
-  // Handle the hardware/browser back button while lightbox is open
   useEffect(() => {
     function onPopState() {
-      // If the lightbox is open when back is pressed, close it.
-      // The history entry has already been popped at this point.
       setLightbox(prev => prev !== null ? null : prev)
     }
     window.addEventListener('popstate', onPopState)
@@ -714,6 +573,9 @@ export default function ShareView() {
   const textColor = dark ? '#e2e4f0' : '#1a1a2e'
   const textMuted = dark ? 'rgba(255,255,255,0.45)' : '#6b7280'
   const tileBg = dark ? '#242840' : '#e5e7eb'
+
+  const scrollbarThumb = dark ? 'rgba(196,164,74,0.5)' : 'rgba(0,0,0,0.3)'
+  const scrollbarTrack = dark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.07)'
 
   useEffect(() => {
     safeFetch(`/api/public/info/${shareId}`)
@@ -790,8 +652,23 @@ export default function ShareView() {
   if (!shareData) return <PasswordGate shareInfo={shareInfo} onUnlock={handleUnlock} dark={dark} />
 
   return (
-    <div style={{ minHeight: '100vh', background: bg, transition: 'background 0.3s', color: textColor }}>
-      <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
+    <div
+      className="share-view-root"
+      style={{ height: '100vh', overflowY: 'scroll', overflowX: 'hidden', background: bg, transition: 'background 0.3s', color: textColor }}
+    >
+      <style>{`
+        @keyframes spin { to { transform: rotate(360deg) } }
+        .share-view-root::-webkit-scrollbar { width: 8px; }
+        .share-view-root::-webkit-scrollbar-track { background: ${scrollbarTrack}; }
+        .share-view-root::-webkit-scrollbar-thumb {
+          background: ${scrollbarThumb};
+          border-radius: 4px;
+        }
+        .share-view-root::-webkit-scrollbar-thumb:hover {
+          background: ${dark ? 'rgba(196,164,74,0.75)' : 'rgba(0,0,0,0.45)'};
+        }
+        .share-view-root { scrollbar-width: thin; scrollbar-color: ${scrollbarThumb} ${scrollbarTrack}; }
+      `}</style>
 
       {/* Header */}
       <div style={{
@@ -809,7 +686,6 @@ export default function ShareView() {
             {shareData.description && <div style={{ color: textMuted, fontSize: '0.75rem', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{shareData.description}</div>}
           </div>
         </div>
-
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, flexWrap: 'wrap' }}>
           {shareData.allow_download && assets.length > 0 && (
             <DownloadZipButton shareId={shareData.id} sessionToken={token} assetCount={assets.length} shareName={shareData.name} />
