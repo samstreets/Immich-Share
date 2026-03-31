@@ -10,6 +10,24 @@ const router = express.Router();
 // All share routes require admin auth
 router.use(requireAuth);
 
+// ── C1 FIX: UUID validation helper ──────────────────────────────────────────
+// All bulk endpoints accept caller-supplied ID arrays. Validate every element
+// before interpolating into SQL to prevent injection via malformed values and
+// to avoid leaking schema detail in DB error messages.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function validateUuids(ids) {
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return { ok: false, error: 'ids must be a non-empty array' };
+  }
+  for (const id of ids) {
+    if (typeof id !== 'string' || !UUID_RE.test(id)) {
+      return { ok: false, error: `Invalid id format: "${id}"` };
+    }
+  }
+  return { ok: true };
+}
+
 function getExternalUrl(db) {
   const row = db.prepare("SELECT value FROM settings WHERE key = 'external_url'").get();
   return (row?.value || '').replace(/\/$/, '');
@@ -40,6 +58,10 @@ function shareUrl(externalUrl, share) {
 function cleanTagIds(raw) {
   if (!raw || !raw.trim()) return null;
   const ids = raw.split(',').map(s => s.trim()).filter(Boolean);
+  // Validate each tag ID is a proper UUID
+  for (const id of ids) {
+    if (!UUID_RE.test(id)) throw new Error(`Invalid tag ID format: "${id}"`);
+  }
   return ids.length > 0 ? ids.join(',') : null;
 }
 
@@ -90,6 +112,10 @@ router.get('/', (req, res) => {
 // Get single share
 router.get('/:id', (req, res) => {
   const db = getDb();
+  // Validate the path param too — it comes from the URL but let's be consistent
+  if (!UUID_RE.test(req.params.id)) {
+    return res.status(400).json({ error: 'Invalid share id' });
+  }
   const share = db.prepare('SELECT * FROM shares WHERE id = ?').get(req.params.id);
   if (!share) return res.status(404).json({ error: 'Share not found' });
 
@@ -104,6 +130,9 @@ router.get('/:id', (req, res) => {
 
 // ── QR Code for share ─────────────────────────────────────────────────────────
 router.get('/:id/qr', (req, res) => {
+  if (!UUID_RE.test(req.params.id)) {
+    return res.status(400).json({ error: 'Invalid share id' });
+  }
   const db = getDb();
   const share = db.prepare('SELECT * FROM shares WHERE id = ?').get(req.params.id);
   if (!share) return res.status(404).json({ error: 'Share not found' });
@@ -128,6 +157,9 @@ router.get('/:id/qr', (req, res) => {
 
 // ── Per-share activity stats ──────────────────────────────────────────────────
 router.get('/:id/stats', (req, res) => {
+  if (!UUID_RE.test(req.params.id)) {
+    return res.status(400).json({ error: 'Invalid share id' });
+  }
   const db = getDb();
   const share = db.prepare('SELECT id, name FROM shares WHERE id = ?').get(req.params.id);
   if (!share) return res.status(404).json({ error: 'Share not found' });
@@ -153,11 +185,13 @@ router.get('/:id/stats', (req, res) => {
 });
 
 // ── Bulk operations ───────────────────────────────────────────────────────────
+
+// C1 FIX: validate every ID as a UUID before building the IN clause.
 router.post('/bulk/delete', (req, res) => {
   const { ids } = req.body;
-  if (!Array.isArray(ids) || ids.length === 0) {
-    return res.status(400).json({ error: 'ids array required' });
-  }
+  const check = validateUuids(ids);
+  if (!check.ok) return res.status(400).json({ error: check.error });
+
   const db = getDb();
   const placeholders = ids.map(() => '?').join(',');
   const result = db.prepare(`DELETE FROM shares WHERE id IN (${placeholders})`).run(...ids);
@@ -166,9 +200,9 @@ router.post('/bulk/delete', (req, res) => {
 
 router.post('/bulk/toggle', (req, res) => {
   const { ids, is_active } = req.body;
-  if (!Array.isArray(ids) || ids.length === 0) {
-    return res.status(400).json({ error: 'ids array required' });
-  }
+  const check = validateUuids(ids);
+  if (!check.ok) return res.status(400).json({ error: check.error });
+
   const db = getDb();
   const placeholders = ids.map(() => '?').join(',');
   const result = db.prepare(
@@ -207,6 +241,13 @@ router.post('/', async (req, res) => {
   if (share_type === 'tag' && !immich_tag_id) {
     return res.status(400).json({ error: 'immich_tag_id required for tag shares' });
   }
+  // Validate album/tag IDs are proper UUIDs
+  if (immich_album_id && !UUID_RE.test(immich_album_id)) {
+    return res.status(400).json({ error: 'Invalid immich_album_id format' });
+  }
+  if (immich_tag_id && !UUID_RE.test(immich_tag_id)) {
+    return res.status(400).json({ error: 'Invalid immich_tag_id format' });
+  }
 
   let slug = null;
   if (rawSlug && rawSlug.trim()) {
@@ -220,9 +261,13 @@ router.post('/', async (req, res) => {
     if (existing) return res.status(409).json({ error: `Slug "${slug}" is already taken` });
   }
 
-  const uploadTagIds = cleanTagIds(rawUploadTagIds);
-  // watch_tag_ids only makes sense for album shares
-  const watchTagIds = share_type === 'album' ? cleanTagIds(rawWatchTagIds) : null;
+  let uploadTagIds, watchTagIds;
+  try {
+    uploadTagIds = cleanTagIds(rawUploadTagIds);
+    watchTagIds = share_type === 'album' ? cleanTagIds(rawWatchTagIds) : null;
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
 
   const id = uuidv4();
   const passwordHash = await bcrypt.hash(password, 10);
@@ -260,6 +305,9 @@ router.post('/', async (req, res) => {
 
 // Update share
 router.patch('/:id', async (req, res) => {
+  if (!UUID_RE.test(req.params.id)) {
+    return res.status(400).json({ error: 'Invalid share id' });
+  }
   const db = getDb();
   const share = db.prepare('SELECT * FROM shares WHERE id = ?').get(req.params.id);
   if (!share) return res.status(404).json({ error: 'Share not found' });
@@ -299,13 +347,18 @@ router.patch('/:id', async (req, res) => {
   const updatedUpload      = allow_upload !== undefined ? (allow_upload ? 1 : 0) : share.allow_upload;
   const updatedMetadata    = show_metadata !== undefined ? (show_metadata ? 1 : 0) : share.show_metadata;
   const updatedActive      = is_active !== undefined ? (is_active ? 1 : 0) : share.is_active;
-  const updatedUploadTagIds = rawUploadTagIds !== undefined
-    ? cleanTagIds(rawUploadTagIds)
-    : share.upload_tag_ids;
-  // watch_tag_ids only applies to album shares; ignore for tag-type shares
-  const updatedWatchTagIds = share.share_type === 'album'
-    ? (rawWatchTagIds !== undefined ? cleanTagIds(rawWatchTagIds) : share.watch_tag_ids)
-    : null;
+
+  let updatedUploadTagIds, updatedWatchTagIds;
+  try {
+    updatedUploadTagIds = rawUploadTagIds !== undefined
+      ? cleanTagIds(rawUploadTagIds)
+      : share.upload_tag_ids;
+    updatedWatchTagIds = share.share_type === 'album'
+      ? (rawWatchTagIds !== undefined ? cleanTagIds(rawWatchTagIds) : share.watch_tag_ids)
+      : null;
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
 
   try {
     db.prepare(`
@@ -341,6 +394,9 @@ router.patch('/:id', async (req, res) => {
 
 // Delete share
 router.delete('/:id', (req, res) => {
+  if (!UUID_RE.test(req.params.id)) {
+    return res.status(400).json({ error: 'Invalid share id' });
+  }
   const db = getDb();
   const result = db.prepare('DELETE FROM shares WHERE id = ?').run(req.params.id);
   if (result.changes === 0) return res.status(404).json({ error: 'Share not found' });
@@ -349,6 +405,9 @@ router.delete('/:id', (req, res) => {
 
 // Get share access logs
 router.get('/:id/logs', (req, res) => {
+  if (!UUID_RE.test(req.params.id)) {
+    return res.status(400).json({ error: 'Invalid share id' });
+  }
   const db = getDb();
   const logs = db.prepare(`
     SELECT * FROM access_logs WHERE share_id = ? ORDER BY accessed_at DESC LIMIT 200

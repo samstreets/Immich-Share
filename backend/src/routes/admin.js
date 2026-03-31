@@ -13,7 +13,13 @@ router.get('/settings', (req, res) => {
   const settings = {};
   for (const row of rows) {
     if (row.key === 'immich_api_key' && row.value) {
-      settings[row.key] = row.value.slice(0, 8) + '••••••••';
+      // C2 FIX: always mask the API key — never expose it in any GET response.
+      // The original codebase had a separate GET /settings/api-key endpoint that
+      // returned the raw key to any authenticated caller. That endpoint is removed.
+      // The key is write-only after initial save: admins can overwrite it via PUT
+      // /settings but can never read it back. This limits blast radius if the
+      // admin JWT is compromised.
+      settings[row.key] = '••••••••' + row.value.slice(-4);
     } else {
       settings[row.key] = row.value;
     }
@@ -22,6 +28,9 @@ router.get('/settings', (req, res) => {
 });
 
 // Update settings
+// NOTE: the API key can be written here (and will be stored), but it cannot be
+// read back. The frontend should treat the key field as a write-only input and
+// show the masked value returned by GET /settings.
 router.put('/settings', (req, res) => {
   const db = getDb();
   const allowed = ['immich_url', 'immich_api_key', 'external_url', 'app_name', 'allowed_origins'];
@@ -40,12 +49,11 @@ router.put('/settings', (req, res) => {
   res.json({ message: 'Settings saved' });
 });
 
-// Get raw API key (separate endpoint for security)
-router.get('/settings/api-key', (req, res) => {
-  const db = getDb();
-  const row = db.prepare("SELECT value FROM settings WHERE key = 'immich_api_key'").get();
-  res.json({ value: row?.value || '' });
-});
+// C2 FIX: GET /settings/api-key endpoint removed entirely.
+// Previously it returned the raw Immich API key to any authenticated admin,
+// meaning a stolen JWT gave an attacker full Immich access immediately.
+// The key is now strictly write-only. If you need to rotate the key, use
+// PUT /settings with the new value.
 
 // Test Immich connection
 router.get('/immich/test', async (req, res) => {

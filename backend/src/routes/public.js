@@ -9,6 +9,18 @@ const { makeToken, verifyToken } = require('../shareSession');
 
 const router = express.Router();
 
+// H3 FIX: hard limits for chunked uploads.
+// totalChunks came from the client's form field with no server-side cap,
+// allowing an attacker to fill /tmp by sending hundreds of thousands of 50 MB
+// chunks. We now enforce both a per-upload chunk count ceiling and a cumulative
+// byte ceiling. These values match the frontend CHUNK_SIZE of 50 MB.
+const MAX_CHUNKS        = 400;                        // 400 × 50 MB = 20 GB max per upload
+const MAX_UPLOAD_BYTES  = MAX_CHUNKS * 50 * 1024 * 1024; // 20 GB
+const CHUNK_SIZE_BYTES  = 50 * 1024 * 1024;           // must match frontend CHUNK_SIZE
+
+// H4 FIX: uploadId must be a UUID to prevent path traversal.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function logAccess(share, req, action = 'view') {
   try {
     const db = getDb();
@@ -394,27 +406,68 @@ router.post('/upload-chunk/:id', async (req, res) => {
     return res.status(400).json({ error: 'Missing required chunk fields' });
   }
 
-  const tmpDir = pathLib.join(os.tmpdir(), 'immich-share-chunks', uploadId);
-  fs.mkdirSync(tmpDir, { recursive: true });
+  // H3 FIX: validate uploadId is a UUID to prevent path traversal (H4).
+  if (!UUID_RE.test(uploadId)) {
+    return res.status(400).json({ error: 'Invalid uploadId format' });
+  }
 
-  const chunkPath = pathLib.join(tmpDir, `chunk_${String(chunkIndex).padStart(6, '0')}`);
-  fs.writeFileSync(chunkPath, chunkBuffer);
+  // H3 FIX: enforce server-side caps on chunk count and individual chunk size.
+  const parsedTotal  = parseInt(totalChunks, 10);
+  const parsedIndex  = parseInt(chunkIndex, 10);
+
+  if (isNaN(parsedTotal) || parsedTotal < 1 || parsedTotal > MAX_CHUNKS) {
+    return res.status(400).json({
+      error: `totalChunks must be between 1 and ${MAX_CHUNKS}`,
+    });
+  }
+  if (isNaN(parsedIndex) || parsedIndex < 0 || parsedIndex >= parsedTotal) {
+    return res.status(400).json({ error: 'Invalid chunkIndex' });
+  }
+  if (chunkBuffer.length > CHUNK_SIZE_BYTES) {
+    return res.status(413).json({
+      error: `Chunk exceeds maximum size of ${CHUNK_SIZE_BYTES / 1024 / 1024} MB`,
+    });
+  }
+
+  // H3 FIX: check that writing this chunk won't exceed the total upload cap.
+  const tmpDir = pathLib.join(os.tmpdir(), 'immich-share-chunks', uploadId);
+  fs.mkdirSync(tmpDir, { recursive: true, mode: 0o700 }); // C3 FIX: 0o700, not default 0o777
+
+  // Sum existing chunks to enforce cumulative byte cap.
+  let existingBytes = 0;
+  try {
+    const existing = fs.readdirSync(tmpDir).filter(f => f.startsWith('chunk_'));
+    for (const f of existing) {
+      existingBytes += fs.statSync(pathLib.join(tmpDir, f)).size;
+    }
+  } catch { /* first chunk — directory may not exist yet */ }
+
+  if (existingBytes + chunkBuffer.length > MAX_UPLOAD_BYTES) {
+    // Clean up to avoid leaving orphaned data
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+    return res.status(413).json({
+      error: `Upload exceeds maximum total size of ${MAX_UPLOAD_BYTES / 1024 / 1024 / 1024} GB`,
+    });
+  }
+
+  const chunkPath = pathLib.join(tmpDir, `chunk_${String(parsedIndex).padStart(6, '0')}`);
+  fs.writeFileSync(chunkPath, chunkBuffer, { mode: 0o600 }); // C3 FIX: restrictive permissions
 
   const metaPath = pathLib.join(tmpDir, 'meta.json');
   if (!fs.existsSync(metaPath)) {
     fs.writeFileSync(metaPath, JSON.stringify({
       uploadId,
-      totalChunks: parseInt(totalChunks, 10),
+      totalChunks: parsedTotal,
       filename: filename || uploadId,
       shareId: share.id,
       createdAt: Date.now(),
-    }));
+    }), { mode: 0o600 }); // C3 FIX
   }
 
   return res.json({
     ok: true,
-    received: parseInt(chunkIndex, 10) + 1,
-    total: parseInt(totalChunks, 10),
+    received: parsedIndex + 1,
+    total: parsedTotal,
   });
 });
 
@@ -431,6 +484,11 @@ router.post('/upload-assemble/:id', async (req, res) => {
   const { uploadId, filename, deviceAssetId, fileCreatedAt, fileModifiedAt } = req.body;
   if (!uploadId || !filename) return res.status(400).json({ error: 'Missing uploadId or filename' });
 
+  // H4 FIX: validate uploadId before using it in a path.
+  if (!UUID_RE.test(uploadId)) {
+    return res.status(400).json({ error: 'Invalid uploadId format' });
+  }
+
   const tmpDir = pathLib.join(os.tmpdir(), 'immich-share-chunks', uploadId);
   const metaPath = pathLib.join(tmpDir, 'meta.json');
 
@@ -443,6 +501,13 @@ router.post('/upload-assemble/:id', async (req, res) => {
     meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
   } catch {
     return res.status(500).json({ error: 'Could not read upload session metadata' });
+  }
+
+  // H3 FIX: re-validate totalChunks from stored meta (not the request body)
+  // to prevent an attacker from lying about the chunk count at assembly time.
+  if (meta.totalChunks > MAX_CHUNKS) {
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+    return res.status(400).json({ error: 'Stored chunk count exceeds server limit' });
   }
 
   const chunkFiles = [];
@@ -564,6 +629,11 @@ router.delete('/upload-chunk/:id/:uploadId', (req, res) => {
   const share = getActiveShare(req.params.id);
   if (!share || !verifyToken(share.id, sessionToken)) {
     return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  // H4 FIX: validate uploadId before using it in a path.
+  if (!UUID_RE.test(req.params.uploadId)) {
+    return res.status(400).json({ error: 'Invalid uploadId format' });
   }
 
   const tmpDir = pathLib.join(os.tmpdir(), 'immich-share-chunks', req.params.uploadId);
