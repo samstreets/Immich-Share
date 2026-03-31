@@ -29,6 +29,11 @@ jobs:
     permissions:
       contents: read
 
+    outputs:
+      # Export the digest from each matrix leg so the merge job can consume them
+      # without needing artifact downloads for the key lookup.
+      digest: ${{ steps.build.outputs.digest }}
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -43,7 +48,8 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Sanitise platform name for cache key
+      # Sanitise once — reuse the output in both cache keys and artifact names.
+      - name: Sanitise platform name
         id: platform
         run: echo "key=$(echo '${{ matrix.platform }}' | tr '/' '-')" >> $GITHUB_OUTPUT
 
@@ -54,17 +60,19 @@ jobs:
           context: .
           platforms: ${{ matrix.platform }}
           push: ${{ github.event_name != 'pull_request' }}
-          # Push as a raw digest — manifest merge happens in the next job
           outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
-          cache-from: type=gha,scope=${{ steps.platform.outputs.key }}
-          cache-to: type=gha,mode=max,scope=${{ steps.platform.outputs.key }}
+          # Separate cache scopes per platform so arm64 and amd64 layers never
+          # evict each other from the shared GHA cache.
+          cache-from: type=gha,scope=build-${{ steps.platform.outputs.key }}
+          cache-to:   type=gha,mode=max,scope=build-${{ steps.platform.outputs.key }}
 
       - name: Export digest
         if: github.event_name != 'pull_request'
         run: |
           mkdir -p /tmp/digests
-          digest="${{ steps.build.outputs.digest }}"
-          touch "/tmp/digests/${digest#sha256:}"
+          touch "/tmp/digests/${DIGEST#sha256:}"
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
 
       - name: Upload digest artifact
         if: github.event_name != 'pull_request'
@@ -100,7 +108,7 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Extract Docker metadata (tags & labels)
+      - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
@@ -121,6 +129,69 @@ jobs:
 
       - name: Inspect final image
         run: docker buildx imagetools inspect ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+
+  # ── Delete all tags on DockerHub that are not part of this release ─────────
+  cleanup:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    needs: merge
+    permissions:
+      contents: read
+
+    steps:
+      - name: Delete old DockerHub tags
+        env:
+          DH_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+          DH_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          REPO: ${{ secrets.DOCKERHUB_USERNAME }}/immich-share
+        run: |
+          set -euo pipefail
+
+          # Authenticate with DockerHub and get a JWT.
+          TOKEN=$(curl -s -X POST "https://hub.docker.com/v2/users/login" \
+            -H "Content-Type: application/json" \
+            -d "{\"username\":\"${DH_USER}\",\"password\":\"${DH_TOKEN}\"}" \
+            | jq -r '.token')
+
+          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
+            echo "::error::DockerHub authentication failed."
+            exit 1
+          fi
+
+          # Fetch all current tags (paginate — DockerHub returns max 100 per page).
+          ALL_TAGS=()
+          NEXT="https://hub.docker.com/v2/repositories/${REPO}/tags?page_size=100"
+          while [ "$NEXT" != "null" ] && [ -n "$NEXT" ]; do
+            PAGE=$(curl -s -H "Authorization: Bearer ${TOKEN}" "$NEXT")
+            mapfile -t PAGE_TAGS < <(echo "$PAGE" | jq -r '.results[].name')
+            ALL_TAGS+=("${PAGE_TAGS[@]}")
+            NEXT=$(echo "$PAGE" | jq -r '.next // "null"')
+          done
+
+          echo "Found ${#ALL_TAGS[@]} tag(s) total."
+
+          # Tags to KEEP: latest + any semver-style tags (v1.2.3, 1.2, 1, sha-*).
+          # Adjust this pattern if your tag scheme differs.
+          KEEP_PATTERN='^(latest|v?[0-9]+(\.[0-9]+){0,2}|sha-.+)$'
+
+          DELETED=0
+          for TAG in "${ALL_TAGS[@]}"; do
+            if echo "$TAG" | grep -qE "$KEEP_PATTERN"; then
+              echo "  KEEP  $TAG"
+            else
+              echo "  DELETE $TAG"
+              HTTP=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+                "https://hub.docker.com/v2/repositories/${REPO}/tags/${TAG}/" \
+                -H "Authorization: Bearer ${TOKEN}")
+              if [ "$HTTP" = "204" ]; then
+                DELETED=$((DELETED + 1))
+              else
+                echo "::warning::Failed to delete tag '${TAG}' (HTTP ${HTTP})"
+              fi
+            fi
+          done
+
+          echo "Done — deleted ${DELETED} tag(s)."
 
   # ── Update Docker Hub readme ───────────────────────────────────────────────
   update-description:
