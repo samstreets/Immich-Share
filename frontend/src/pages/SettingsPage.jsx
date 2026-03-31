@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react'
 import { useApi } from '../hooks/useAuth.jsx'
-const [apiKeyMasked, setApiKeyMasked] = useState('')
 
 function SectionCard({ title, subtitle, icon, children, style, accent }) {
   return (
@@ -127,6 +126,7 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true)
 
   const [immichUrl, setImmichUrl] = useState('')
+  const [apiKeyMasked, setApiKeyMasked] = useState('')
   const [apiKeyRaw, setApiKeyRaw] = useState('')
   const [showApiKey, setShowApiKey] = useState(false)
   const [testResult, setTestResult] = useState(null)
@@ -148,18 +148,18 @@ export default function SettingsPage() {
   const [pwSaving, setPwSaving] = useState(false)
 
   useEffect(() => {
-  async function load() {
-    try {
-      const s = await api('/admin/settings')
-      setImmichUrl(s.immich_url || '')
-      setApiKeyMasked(s.immich_api_key || '')
-      setExternalUrl(s.external_url || '')
-      setAppName(s.app_name || '')
-      setAllowedOrigins(s.allowed_origins || '')
-    } catch (e) { console.error(e) }
-    finally { setLoading(false) }
-  }
-  load()
+    async function load() {
+      try {
+        const s = await api('/admin/settings')
+        setImmichUrl(s.immich_url || '')
+        setApiKeyMasked(s.immich_api_key || '')
+        setExternalUrl(s.external_url || '')
+        setAppName(s.app_name || '')
+        setAllowedOrigins(s.allowed_origins || '')
+      } catch (e) { console.error(e) }
+      finally { setLoading(false) }
+    }
+    load()
   }, [])
 
   async function saveImmich(e) {
