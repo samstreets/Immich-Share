@@ -62,20 +62,90 @@ All settings can be configured via environment variables **or** the admin UI (Se
 
 Immich API keys are scoped per-user. The key you provide needs the following permissions — these map directly to what Immich Share calls on your behalf:
 
+#### Minimum permissions for read-only shares
+
 | Permission | Why it's needed |
 |---|---|
 | `album.read` | List and browse albums in the share creation UI |
-| `asset.read` | Fetch asset metadata and serve thumbnails/previews/originals |
+| `album.statistics` | Fetch album asset counts for the admin UI |
+| `albumAsset.create` | Add uploaded assets to the shared album |
+| `asset.read` | Fetch asset metadata |
+| `asset.view` | Serve thumbnails and preview images to share viewers |
 | `asset.download` | Proxy original file downloads to share viewers |
 | `tag.read` | List tags so you can create tag-based shares |
-| `asset.upload` | Required only if you enable **Allow Uploads** on a share — lets viewers contribute photos back to Immich |
-| `album.addAsset` | Required only if you enable **Allow Uploads** — adds uploaded assets to the shared album |
 
-> **Minimum for read-only shares:** `album.read`, `asset.read`, `asset.download`, `tag.read`
->
-> **For upload-enabled shares, also add:** `asset.upload`, `album.addAsset`
+#### Additional permissions for upload-enabled shares
+
+| Permission | Why it's needed |
+|---|---|
+| `asset.upload` | Let viewers upload photos back into Immich |
+| `tag.asset` | Apply auto-tags to assets uploaded through a share |
+
+#### Additional permissions for the auto-tag watcher
+
+| Permission | Why it's needed |
+|---|---|
+| `tag.asset` | Apply watch tags to newly added album assets |
 
 > **Note:** If you are using an **admin** Immich account to generate the key, all permissions are granted by default and no scoping is required. Scoped permissions apply when generating a key from a non-admin account or when using Immich's fine-grained API key scopes (available in Immich v1.100+).
+
+### Full permission reference
+
+Below is the complete list of Immich API key permissions. Only the ones listed in the tables above are required by Immich Share — everything else can be left disabled.
+
+<details>
+<summary>Click to expand full permission list</summary>
+
+| Scope | Permissions |
+|---|---|
+| `activity` | `activity.create` `activity.read` `activity.update` `activity.delete` `activity.statistics` |
+| `apiKey` | `apiKey.create` `apiKey.read` `apiKey.update` `apiKey.delete` |
+| `asset` | `asset.read` `asset.update` `asset.delete` `asset.statistics` `asset.share` `asset.view` `asset.download` `asset.upload` `asset.replace` `asset.copy` `asset.derive` `asset.edit.get` `asset.edit.create` `asset.edit.delete` |
+| `album` | `album.create` `album.read` `album.update` `album.delete` `album.statistics` `album.share` `album.download` |
+| `albumAsset` | `albumAsset.create` `albumAsset.delete` |
+| `albumUser` | `albumUser.create` `albumUser.update` `albumUser.delete` |
+| `auth` | `auth.changePassword` |
+| `authDevice` | `authDevice.delete` |
+| `archive` | `archive.read` |
+| `backup` | `backup.list` `backup.download` `backup.upload` `backup.delete` |
+| `duplicate` | `duplicate.read` `duplicate.delete` |
+| `face` | `face.create` `face.read` `face.update` `face.delete` |
+| `folder` | `folder.read` |
+| `job` | `job.create` `job.read` |
+| `library` | `library.create` `library.read` `library.update` `library.delete` `library.statistics` |
+| `timeline` | `timeline.read` `timeline.download` |
+| `maintenance` | `maintenance` |
+| `map` | `map.read` `map.search` |
+| `memory` | `memory.create` `memory.read` `memory.update` `memory.delete` `memory.statistics` |
+| `memoryAsset` | `memoryAsset.create` `memoryAsset.delete` |
+| `notification` | `notification.create` `notification.read` `notification.update` `notification.delete` |
+| `partner` | `partner.create` `partner.read` `partner.update` `partner.delete` |
+| `person` | `person.create` `person.read` `person.update` `person.delete` `person.statistics` `person.merge` `person.reassign` |
+| `pinCode` | `pinCode.create` `pinCode.update` `pinCode.delete` |
+| `plugin` | `plugin.create` `plugin.read` `plugin.update` `plugin.delete` |
+| `server` | `server.about` `server.apkLinks` `server.storage` `server.statistics` `server.versionCheck` |
+| `serverLicense` | `serverLicense.read` `serverLicense.update` `serverLicense.delete` |
+| `session` | `session.create` `session.read` `session.update` `session.delete` `session.lock` |
+| `sharedLink` | `sharedLink.create` `sharedLink.read` `sharedLink.update` `sharedLink.delete` |
+| `stack` | `stack.create` `stack.read` `stack.update` `stack.delete` |
+| `sync` | `sync.stream` |
+| `syncCheckpoint` | `syncCheckpoint.read` `syncCheckpoint.update` `syncCheckpoint.delete` |
+| `systemConfig` | `systemConfig.read` `systemConfig.update` |
+| `systemMetadata` | `systemMetadata.read` `systemMetadata.update` |
+| `tag` | `tag.create` `tag.read` `tag.update` `tag.delete` `tag.asset` |
+| `user` | `user.read` `user.update` |
+| `userLicense` | `userLicense.create` `userLicense.read` `userLicense.update` `userLicense.delete` |
+| `userOnboarding` | `userOnboarding.read` `userOnboarding.update` `userOnboarding.delete` |
+| `userPreference` | `userPreference.read` `userPreference.update` |
+| `userProfileImage` | `userProfileImage.create` `userProfileImage.read` `userProfileImage.update` `userProfileImage.delete` |
+| `queue` | `queue.read` `queue.update` |
+| `queueJob` | `queueJob.create` `queueJob.read` `queueJob.update` `queueJob.delete` |
+| `workflow` | `workflow.create` `workflow.read` `workflow.update` `workflow.delete` |
+| `adminUser` | `adminUser.create` `adminUser.read` `adminUser.update` `adminUser.delete` |
+| `adminSession` | `adminSession.read` |
+| `adminAuth` | `adminAuth.unlinkAll` |
+
+</details>
 
 ---
 
@@ -97,9 +167,9 @@ server {
         proxy_read_timeout 300s;
     }
 }
+```
 
 ---
-
 
 ### Prerequisites
 - Node.js 20+
@@ -143,10 +213,6 @@ docker run -p 3000:3000 \
 - Share passwords are **bcrypt-hashed** (cost factor 10–12)
 - Admin passwords are bcrypt-hashed (cost factor 12)
 - Rate limiting is applied to auth and share-verify endpoints
-
----
-
-
 
 ---
 
