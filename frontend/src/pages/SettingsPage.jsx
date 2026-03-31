@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { useApi } from '../hooks/useAuth.jsx'
+const [apiKeyMasked, setApiKeyMasked] = useState('')
 
 function SectionCard({ title, subtitle, icon, children, style, accent }) {
   return (
@@ -147,16 +148,18 @@ export default function SettingsPage() {
   const [pwSaving, setPwSaving] = useState(false)
 
   useEffect(() => {
-    async function load() {
-      try {
-        const [s, key] = await Promise.all([api('/admin/settings'), api('/admin/settings/api-key')])
-        setImmichUrl(s.immich_url || ''); setApiKeyRaw(key.value || '')
-        setExternalUrl(s.external_url || ''); setAppName(s.app_name || '')
-        setAllowedOrigins(s.allowed_origins || '')
-      } catch (e) { console.error(e) }
-      finally { setLoading(false) }
-    }
-    load()
+  async function load() {
+    try {
+      const s = await api('/admin/settings')
+      setImmichUrl(s.immich_url || '')
+      setApiKeyMasked(s.immich_api_key || '')
+      setExternalUrl(s.external_url || '')
+      setAppName(s.app_name || '')
+      setAllowedOrigins(s.allowed_origins || '')
+    } catch (e) { console.error(e) }
+    finally { setLoading(false) }
+  }
+  load()
   }, [])
 
   async function saveImmich(e) {
@@ -263,7 +266,13 @@ export default function SettingsPage() {
               <div className="form-group">
                 <label>API Key</label>
                 <div style={{ display: 'flex', gap: 7 }}>
-                  <input type={showApiKey ? 'text' : 'password'} value={apiKeyRaw} onChange={e => setApiKeyRaw(e.target.value)} placeholder="Paste your Immich API key" style={{ flex: 1, fontFamily: showApiKey ? 'monospace' : 'inherit', fontSize: showApiKey ? '0.72rem' : '0.875rem' }} />
+                  <input
+                    type={showApiKey ? 'text' : 'password'}
+                    value={apiKeyRaw}
+                    onChange={e => setApiKeyRaw(e.target.value)}
+                    placeholder={apiKeyMasked || 'Paste your Immich API key'}
+                    style={{ flex: 1, fontFamily: showApiKey ? 'monospace' : 'inherit', fontSize: showApiKey ? '0.72rem' : '0.875rem' }}
+                  />
                   <button type="button" className="btn btn-secondary btn-sm" onClick={() => setShowApiKey(v => !v)} style={{ flexShrink: 0 }} title={showApiKey ? 'Hide' : 'Show'}><EyeIcon visible={showApiKey} /></button>
                 </div>
                 <span className="hint">Account Settings → API Keys in Immich.</span>
