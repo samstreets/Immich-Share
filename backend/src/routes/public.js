@@ -6,7 +6,6 @@ const pathLib = require('path');
 const { getDb } = require('../db');
 const { getAlbum, getAssetsByTag, proxyAssetOriginal, tagAssets } = require('../immich');
 const { makeToken, verifyToken } = require('../shareSession');
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const router = express.Router();
 
 // H3 FIX: hard limits for chunked uploads.
