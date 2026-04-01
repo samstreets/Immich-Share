@@ -6,7 +6,7 @@ const pathLib = require('path');
 const { getDb } = require('../db');
 const { getAlbum, getAssetsByTag, proxyAssetOriginal, tagAssets } = require('../immich');
 const { makeToken, verifyToken } = require('../shareSession');
-
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const router = express.Router();
 
 // H3 FIX: hard limits for chunked uploads.
@@ -171,8 +171,16 @@ router.get('/zip/:id', async (req, res) => {
       assets = await getAssetsByTag(share.immich_tag_id);
     }
 
+    const idsParam = req.query.ids
+    if (idsParam) {
+      const allowed = new Set(
+        idsParam.split(',').map(s => s.trim()).filter(s => UUID_RE.test(s))
+      )
+      assets = assets.filter(a => allowed.has(a.id))
+    }
+
     if (assets.length === 0) {
-      return res.status(404).send('No assets found');
+      return res.status(404).send('No assets found')
     }
 
     const safeName = share.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 60) || 'share';

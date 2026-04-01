@@ -57,12 +57,8 @@ function PasswordGate({ shareInfo, onUnlock, dark }) {
   const inputColor = dark ? '#e2e4f0' : '#1a1a2e'
 
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', background: bg, position: 'relative', transition: 'background 0.3s' }}>
-      <div style={{
-        position: 'absolute', inset: 0,
-        background: `radial-gradient(ellipse 60% 40% at 50% 0%, ${dark ? 'rgba(212,168,67,0.07)' : 'rgba(212,168,67,0.12)'} 0%, transparent 70%)`,
-        pointerEvents: 'none',
-      }} />
+    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', background: bg, position: 'relative', overflow: 'hidden', transition: 'background 0.3s' }}>
+      <div style={{ position: 'absolute', inset: 0, background: `radial-gradient(ellipse 60% 40% at 50% 0%, ${dark ? 'rgba(212,168,67,0.07)' : 'rgba(212,168,67,0.12)'} 0%, transparent 70%)`, pointerEvents: 'none' }} />
       <div style={{ width: '100%', maxWidth: '380px', position: 'relative', zIndex: 1 }}>
         <div style={{ textAlign: 'center', marginBottom: 28 }}>
           <div style={{ width: 62, height: 62, borderRadius: 18, background: 'linear-gradient(135deg, #d4a843, #f5cc6c)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 18px', fontSize: '1.8rem', boxShadow: '0 10px 32px rgba(212,168,67,0.4)' }}>🔒</div>
@@ -99,13 +95,16 @@ function PasswordGate({ shareInfo, onUnlock, dark }) {
   )
 }
 
-function DownloadZipButton({ shareId, sessionToken, assetCount, shareName }) {
+function DownloadZipButton({ shareId, sessionToken, assetCount, shareName, selectedIds = null }) {
   const [state, setState] = useState('idle')
   const [progress, setProgress] = useState(0)
   const [received, setReceived] = useState(0)
   const [total, setTotal] = useState(0)
   const [errorMsg, setErrorMsg] = useState('')
   const abortRef = useRef(null)
+
+  const count = selectedIds ? selectedIds.length : assetCount
+  const label = selectedIds ? `Download Selected (${count})` : `Download All (${count})`
 
   function formatBytes(b) {
     if (b < 1024) return `${b} B`
@@ -116,36 +115,25 @@ function DownloadZipButton({ shareId, sessionToken, assetCount, shareName }) {
   async function handleDownload() {
     if (state === 'downloading') {
       abortRef.current?.abort()
-      setState('idle')
-      setProgress(0)
-      setReceived(0)
-      setTotal(0)
+      setState('idle'); setProgress(0); setReceived(0); setTotal(0)
       return
     }
 
-    setState('downloading')
-    setProgress(0)
-    setReceived(0)
-    setTotal(0)
-    setErrorMsg('')
-
+    setState('downloading'); setProgress(0); setReceived(0); setTotal(0); setErrorMsg('')
     const controller = new AbortController()
     abortRef.current = controller
 
     try {
       const t = encodeURIComponent(sessionToken)
-      const res = await fetch(`/api/public/zip/${shareId}?t=${t}`, {
-        signal: controller.signal,
-      })
-
-      if (!res.ok) {
-        const text = await res.text()
-        throw new Error(text || `HTTP ${res.status}`)
+      let url = `/api/public/zip/${shareId}?t=${t}`
+      if (selectedIds && selectedIds.length > 0) {
+        url += `&ids=${encodeURIComponent(selectedIds.join(','))}`
       }
+      const res = await fetch(url, { signal: controller.signal })
+      if (!res.ok) { const text = await res.text(); throw new Error(text || `HTTP ${res.status}`) }
 
       const contentLength = parseInt(res.headers.get('content-length') || '0', 10)
       setTotal(contentLength)
-
       const reader = res.body.getReader()
       const chunks = []
       let loaded = 0
@@ -153,35 +141,25 @@ function DownloadZipButton({ shareId, sessionToken, assetCount, shareName }) {
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
-        chunks.push(value)
-        loaded += value.length
-        setReceived(loaded)
-        if (contentLength > 0) {
-          setProgress(Math.min(Math.round((loaded / contentLength) * 100), 99))
-        } else {
-          setProgress(prev => (prev >= 95 ? 10 : prev + 1))
-        }
+        chunks.push(value); loaded += value.length; setReceived(loaded)
+        if (contentLength > 0) setProgress(Math.min(Math.round((loaded / contentLength) * 100), 99))
+        else setProgress(prev => (prev >= 95 ? 10 : prev + 1))
       }
 
       setProgress(100)
-
       const blob = new Blob(chunks, { type: 'application/zip' })
-      const url = URL.createObjectURL(blob)
+      const blobUrl = URL.createObjectURL(blob)
       const a = document.createElement('a')
-      a.href = url
+      a.href = blobUrl
       const safe = (shareName || 'share').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 60)
-      a.download = `${safe}.zip`
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      URL.revokeObjectURL(url)
-
+      a.download = selectedIds ? `${safe}_selection.zip` : `${safe}.zip`
+      document.body.appendChild(a); a.click(); document.body.removeChild(a)
+      URL.revokeObjectURL(blobUrl)
       setState('done')
       setTimeout(() => { setState('idle'); setProgress(0); setReceived(0); setTotal(0) }, 3000)
     } catch (err) {
       if (err.name === 'AbortError') return
-      setErrorMsg(err.message)
-      setState('error')
+      setErrorMsg(err.message); setState('error')
       setTimeout(() => { setState('idle'); setProgress(0) }, 4000)
     }
   }
@@ -189,7 +167,6 @@ function DownloadZipButton({ shareId, sessionToken, assetCount, shareName }) {
   const isDownloading = state === 'downloading'
   const isDone = state === 'done'
   const isError = state === 'error'
-
   const btnBg = isError ? 'rgba(248,113,113,0.15)' : isDone ? 'rgba(74,222,128,0.15)' : isDownloading ? 'rgba(196,164,74,0.2)' : 'rgba(255,255,255,0.1)'
   const btnColor = isError ? '#f87171' : isDone ? '#4ade80' : isDownloading ? '#c4a44a' : 'rgba(255,255,255,0.8)'
   const btnBorder = isError ? '1px solid rgba(248,113,113,0.3)' : isDone ? '1px solid rgba(74,222,128,0.3)' : isDownloading ? '1px solid rgba(196,164,74,0.4)' : '1px solid rgba(255,255,255,0.15)'
@@ -198,18 +175,12 @@ function DownloadZipButton({ shareId, sessionToken, assetCount, shareName }) {
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
       <button
         onClick={handleDownload}
-        style={{
-          display: 'flex', alignItems: 'center', gap: 5,
-          padding: '6px 12px', borderRadius: 999, fontSize: '0.78rem', fontWeight: 600,
-          background: btnBg, color: btnColor, border: btnBorder,
-          cursor: 'pointer', fontFamily: 'inherit', transition: 'all 0.15s',
-          minWidth: 140, justifyContent: 'center',
-        }}
+        style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '6px 12px', borderRadius: 999, fontSize: '0.78rem', fontWeight: 600, background: btnBg, color: btnColor, border: btnBorder, cursor: 'pointer', fontFamily: 'inherit', transition: 'all 0.15s', minWidth: 140, justifyContent: 'center' }}
       >
         {isDownloading ? (
           <><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>Cancel</>
         ) : isDone ? <>✓ Downloaded!</> : isError ? <>✗ {errorMsg.slice(0, 28)}{errorMsg.length > 28 ? '…' : ''}</> : (
-          <><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Download All ({assetCount})</>
+          <><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>{label}</>
         )}
       </button>
       {isDownloading && (
@@ -245,14 +216,12 @@ async function uploadFileChunked(file, shareId, sessionToken, onProgress) {
     const start = i * CHUNK_SIZE
     const end = Math.min(start + CHUNK_SIZE, file.size)
     const chunkBlob = file.slice(start, end)
-
     const formData = new FormData()
     formData.append('chunkData', chunkBlob, file.name)
     formData.append('uploadId', uploadId)
     formData.append('chunkIndex', String(i))
     formData.append('totalChunks', String(totalChunks))
     formData.append('filename', file.name)
-
     let attempt = 0
     while (attempt < 3) {
       const res = await fetch(`/api/public/upload-chunk/${shareId}?t=${t}`, { method: 'POST', body: formData })
@@ -272,18 +241,10 @@ async function uploadFileChunked(file, shareId, sessionToken, onProgress) {
   const assembleRes = await fetch(`/api/public/upload-assemble/${shareId}?t=${t}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      uploadId,
-      filename: file.name,
-      deviceAssetId: `${file.name}-${file.size}-${file.lastModified}`,
-      fileCreatedAt: new Date(file.lastModified).toISOString(),
-      fileModifiedAt: new Date(file.lastModified).toISOString(),
-    }),
+    body: JSON.stringify({ uploadId, filename: file.name, deviceAssetId: `${file.name}-${file.size}-${file.lastModified}`, fileCreatedAt: new Date(file.lastModified).toISOString(), fileModifiedAt: new Date(file.lastModified).toISOString() }),
   })
-
   const assembleData = await assembleRes.json().catch(() => ({ error: `HTTP ${assembleRes.status}` }))
   onProgress(100)
-
   if (!assembleRes.ok) return { success: false, error: assembleData.error || 'Assembly failed' }
   return { success: true, assetId: assembleData.assetId }
 }
@@ -309,19 +270,14 @@ function UploadPanel({ shareId, sessionToken, onUploaded }) {
 
   async function uploadAll() {
     if (!files.length) return
-    setUploading(true)
-    setResults([])
-    setProgress({})
-
+    setUploading(true); setResults([]); setProgress({})
     const out = []
     for (const file of files) {
       setProgress(prev => ({ ...prev, [file.name]: 0 }))
       const result = await uploadFileChunked(file, shareId, sessionToken, pct => setProgress(prev => ({ ...prev, [file.name]: pct })))
       out.push({ name: file.name, ...result })
     }
-
-    setResults(out)
-    setUploading(false)
+    setResults(out); setUploading(false)
     if (out.some(r => r.success)) { setFiles([]); setTimeout(onUploaded, 800) }
   }
 
@@ -460,7 +416,7 @@ function LightBox({ asset, token, onClose, onPrev, onNext, total, index }) {
   )
 }
 
-function GalleryControls({ viewMode, setViewMode, sortOrder, setSortOrder, typeFilter, setTypeFilter, total, filteredTotal, dark, onThemeToggle }) {
+function GalleryControls({ viewMode, setViewMode, sortOrder, setSortOrder, typeFilter, setTypeFilter, total, filteredTotal, dark, onThemeToggle, selectMode, setSelectMode, selectedCount, onSelectAll, onClearSelection }) {
   const btnStyle = (active) => ({
     padding: '5px 10px', borderRadius: 6, fontSize: '0.75rem', fontWeight: 600,
     background: active ? 'rgba(196,164,74,0.2)' : 'rgba(255,255,255,0.08)',
@@ -494,6 +450,24 @@ function GalleryControls({ viewMode, setViewMode, sortOrder, setSortOrder, typeF
           <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2"><line x1="4" y1="3" x2="16" y2="3"/><line x1="4" y1="8" x2="16" y2="8"/><line x1="4" y1="13" x2="16" y2="13"/><circle cx="1" cy="3" r="1" fill="currentColor"/><circle cx="1" cy="8" r="1" fill="currentColor"/><circle cx="1" cy="13" r="1" fill="currentColor"/></svg>
         </button>
       </div>
+      <div style={{ width: 1, height: 20, background: 'rgba(255,255,255,0.1)', margin: '0 4px' }} />
+      {/* Select mode toggle */}
+      <button
+        style={{
+          ...btnStyle(selectMode),
+          display: 'flex', alignItems: 'center', gap: 4,
+        }}
+        onClick={() => { setSelectMode(v => !v); if (selectMode) onClearSelection() }}
+        title="Select items to download"
+      >
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+        </svg>
+        {selectMode ? (selectedCount > 0 ? `${selectedCount} selected` : 'Selecting') : 'Select'}
+      </button>
+      {selectMode && (
+        <button style={{ ...btnStyle(false), fontSize: '0.7rem', padding: '4px 8px' }} onClick={onSelectAll}>All</button>
+      )}
       <button onClick={onThemeToggle} style={btnStyle(false)} title={dark ? 'Switch to light mode' : 'Switch to dark mode'}>
         {dark ? '☀️' : '🌙'}
       </button>
@@ -501,13 +475,63 @@ function GalleryControls({ viewMode, setViewMode, sortOrder, setSortOrder, typeF
   )
 }
 
-function ListItem({ asset, token, onClick }) {
+// Selection bar shown when items are selected
+function SelectionBar({ selectedCount, totalCount, allowDownload, shareId, sessionToken, shareName, onClearSelection, dark }) {
+  const borderColor = dark ? 'rgba(196,164,74,0.4)' : 'rgba(196,164,74,0.5)'
+  const bg = dark ? 'rgba(196,164,74,0.08)' : 'rgba(196,164,74,0.1)'
+
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 10, padding: '8px 16px',
+      background: bg, borderBottom: `1px solid ${borderColor}`,
+      flexWrap: 'wrap',
+      animation: 'selBarIn 0.15s ease',
+    }}>
+      <style>{`@keyframes selBarIn { from { opacity:0; transform:translateY(-4px) } }`}</style>
+      <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#c4a44a' }}>
+        {selectedCount} of {totalCount} selected
+      </span>
+      <button
+        onClick={onClearSelection}
+        style={{ fontSize: '0.75rem', fontWeight: 600, background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)', color: 'rgba(255,255,255,0.6)', borderRadius: 999, padding: '3px 10px', cursor: 'pointer', fontFamily: 'inherit' }}
+      >
+        Clear
+      </button>
+      {allowDownload && selectedCount > 0 && (
+        <div style={{ marginLeft: 'auto' }}>
+          <DownloadZipButton
+            shareId={shareId}
+            sessionToken={sessionToken}
+            assetCount={selectedCount}
+            shareName={shareName}
+            selectedIds={null /* passed via props below */}
+          />
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ListItem({ asset, token, onClick, selectMode, selected, onToggleSelect }) {
   const t = encodeURIComponent(token)
   return (
-    <div onClick={onClick} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px', cursor: 'pointer', borderBottom: '1px solid rgba(255,255,255,0.05)', transition: 'background 0.1s' }}
-      onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.04)'}
-      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+    <div
+      onClick={selectMode ? onToggleSelect : onClick}
+      style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px', cursor: 'pointer', borderBottom: '1px solid rgba(255,255,255,0.05)', transition: 'background 0.1s', background: selected ? 'rgba(196,164,74,0.08)' : 'transparent' }}
+      onMouseEnter={e => { if (!selected) e.currentTarget.style.background = 'rgba(255,255,255,0.04)' }}
+      onMouseLeave={e => { if (!selected) e.currentTarget.style.background = 'transparent' }}
     >
+      {selectMode && (
+        <div style={{
+          width: 18, height: 18, borderRadius: 5, flexShrink: 0,
+          background: selected ? '#c4a44a' : 'rgba(255,255,255,0.1)',
+          border: selected ? '2px solid #c4a44a' : '2px solid rgba(255,255,255,0.2)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          transition: 'all 0.12s',
+        }}>
+          {selected && <svg width="10" height="10" viewBox="0 0 12 12" fill="none"><polyline points="2 6 5 9 10 3" stroke="#1a1200" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+        </div>
+      )}
       <div style={{ width: 48, height: 48, borderRadius: 6, overflow: 'hidden', background: 'rgba(255,255,255,0.08)', flexShrink: 0 }}>
         <img src={`${asset.thumbnailUrl}?t=${t}`} alt="" loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
       </div>
@@ -538,6 +562,10 @@ export default function ShareView() {
   const [sortOrder, setSortOrder] = useState('newest')
   const [typeFilter, setTypeFilter] = useState('all')
 
+  // Selection state
+  const [selectMode, setSelectMode] = useState(false)
+  const [selectedIds, setSelectedIds] = useState(new Set())
+
   const displayedAssets = useMemo(() => {
     let list = [...assets]
     if (typeFilter !== 'all') list = list.filter(a => a.type === typeFilter)
@@ -545,24 +573,37 @@ export default function ShareView() {
     return list
   }, [assets, sortOrder, typeFilter])
 
+  function toggleSelectItem(id) {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+
+  function selectAll() {
+    setSelectedIds(new Set(displayedAssets.map(a => a.id)))
+  }
+
+  function clearSelection() {
+    setSelectedIds(new Set())
+  }
+
   const openLightbox = useCallback((index) => {
+    if (selectMode) return // don't open lightbox in select mode
     setLightbox(index)
     window.history.pushState({ lightbox: true }, '')
-  }, [])
+  }, [selectMode])
 
   const closeLightbox = useCallback(() => {
     setLightbox(prev => {
-      if (prev !== null && window.history.state?.lightbox) {
-        window.history.back()
-      }
+      if (prev !== null && window.history.state?.lightbox) window.history.back()
       return null
     })
   }, [])
 
   useEffect(() => {
-    function onPopState() {
-      setLightbox(prev => prev !== null ? null : prev)
-    }
+    function onPopState() { setLightbox(prev => prev !== null ? null : prev) }
     window.addEventListener('popstate', onPopState)
     return () => window.removeEventListener('popstate', onPopState)
   }, [])
@@ -573,7 +614,6 @@ export default function ShareView() {
   const textColor = dark ? '#e2e4f0' : '#1a1a2e'
   const textMuted = dark ? 'rgba(255,255,255,0.45)' : '#6b7280'
   const tileBg = dark ? '#242840' : '#e5e7eb'
-
   const scrollbarThumb = dark ? 'rgba(196,164,74,0.5)' : 'rgba(0,0,0,0.3)'
   const scrollbarTrack = dark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.07)'
 
@@ -590,19 +630,15 @@ export default function ShareView() {
   const loadAssets = useCallback(async (sessionToken, shareUuid) => {
     setAssetsLoading(true); setAssetsError('')
     try {
-      const id = shareUuid || shareId
-      const { ok, data } = await safeFetch(`/api/public/content/${id}`, {
+      const { ok, data } = await safeFetch(`/api/public/content/${shareUuid || shareId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionToken }),
       })
       if (!ok) throw new Error(data.error || 'Failed to load content')
       setAssets(data.assets)
-    } catch (err) {
-      setAssetsError(err.message)
-    } finally {
-      setAssetsLoading(false)
-    }
+    } catch (err) { setAssetsError(err.message) }
+    finally { setAssetsLoading(false) }
   }, [shareId])
 
   const handleUnlock = useCallback(async (data) => {
@@ -618,7 +654,7 @@ export default function ShareView() {
   const t = encodeURIComponent(token)
 
   const Spinner = ({ size = 32 }) => (
-    <div style={{ width: size, height: size, border: `${size/10}px solid rgba(196,164,74,0.2)`, borderTopColor: '#c4a44a', borderRadius: '50%', animation: 'spin 0.6s linear infinite' }} />
+    <div style={{ width: size, height: size, border: `${size / 10}px solid rgba(196,164,74,0.2)`, borderTopColor: '#c4a44a', borderRadius: '50%', animation: 'spin 0.6s linear infinite' }} />
   )
 
   if (infoLoading) return (
@@ -651,6 +687,8 @@ export default function ShareView() {
 
   if (!shareData) return <PasswordGate shareInfo={shareInfo} onUnlock={handleUnlock} dark={dark} />
 
+  const selectedIdsArray = [...selectedIds]
+
   return (
     <div
       className="share-view-root"
@@ -660,22 +698,28 @@ export default function ShareView() {
         @keyframes spin { to { transform: rotate(360deg) } }
         .share-view-root::-webkit-scrollbar { width: 8px; }
         .share-view-root::-webkit-scrollbar-track { background: ${scrollbarTrack}; }
-        .share-view-root::-webkit-scrollbar-thumb {
-          background: ${scrollbarThumb};
-          border-radius: 4px;
-        }
-        .share-view-root::-webkit-scrollbar-thumb:hover {
-          background: ${dark ? 'rgba(196,164,74,0.75)' : 'rgba(0,0,0,0.45)'};
-        }
+        .share-view-root::-webkit-scrollbar-thumb { background: ${scrollbarThumb}; border-radius: 4px; }
+        .share-view-root::-webkit-scrollbar-thumb:hover { background: ${dark ? 'rgba(196,164,74,0.75)' : 'rgba(0,0,0,0.45)'}; }
         .share-view-root { scrollbar-width: thin; scrollbar-color: ${scrollbarThumb} ${scrollbarTrack}; }
+        .grid-tile-checkbox {
+          position: absolute; top: 6px; left: 6px; z-index: 2;
+          width: 22px; height: 22px; border-radius: 6px;
+          background: rgba(0,0,0,0.55); backdrop-filter: blur(4px);
+          border: 2px solid rgba(255,255,255,0.35);
+          display: flex; align-items: center; justify-content: center;
+          transition: all 0.12s; cursor: pointer;
+        }
+        .grid-tile-checkbox.checked {
+          background: #c4a44a; border-color: #c4a44a;
+        }
+        .grid-tile:hover .grid-tile-checkbox-hint { opacity: 1 !important; }
       `}</style>
 
       {/* Header */}
       <div style={{
         padding: '0 16px', height: 56,
         borderBottom: `1px solid ${borderColor}`,
-        background: headerBg,
-        backdropFilter: 'blur(12px)',
+        background: headerBg, backdropFilter: 'blur(12px)',
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         gap: 12, position: 'sticky', top: 0, zIndex: 10,
       }}>
@@ -687,7 +731,18 @@ export default function ShareView() {
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, flexWrap: 'wrap' }}>
-          {shareData.allow_download && assets.length > 0 && (
+          {/* Download selected button — shown in header when items are selected and downloads allowed */}
+          {shareData.allow_download && selectedIds.size > 0 && (
+            <DownloadZipButton
+              shareId={shareData.id}
+              sessionToken={token}
+              assetCount={selectedIds.size}
+              shareName={shareData.name}
+              selectedIds={selectedIdsArray}
+            />
+          )}
+          {/* Download all — shown when nothing selected */}
+          {shareData.allow_download && assets.length > 0 && selectedIds.size === 0 && (
             <DownloadZipButton shareId={shareData.id} sessionToken={token} assetCount={assets.length} shareName={shareData.name} />
           )}
           {shareData.allow_upload && (
@@ -714,7 +769,30 @@ export default function ShareView() {
           typeFilter={typeFilter} setTypeFilter={setTypeFilter}
           total={assets.length} filteredTotal={displayedAssets.length}
           dark={dark} onThemeToggle={toggleTheme}
+          selectMode={selectMode} setSelectMode={setSelectMode}
+          selectedCount={selectedIds.size}
+          onSelectAll={selectAll}
+          onClearSelection={clearSelection}
         />
+      )}
+
+      {/* Selection info bar */}
+      {selectMode && selectedIds.size > 0 && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 10, padding: '8px 16px',
+          background: 'rgba(196,164,74,0.08)', borderBottom: '1px solid rgba(196,164,74,0.25)',
+          flexWrap: 'wrap',
+        }}>
+          <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#c4a44a' }}>
+            {selectedIds.size} item{selectedIds.size !== 1 ? 's' : ''} selected
+          </span>
+          <button onClick={clearSelection} style={{ fontSize: '0.72rem', fontWeight: 600, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.55)', borderRadius: 999, padding: '2px 9px', cursor: 'pointer', fontFamily: 'inherit' }}>
+            Clear
+          </button>
+          <button onClick={selectAll} style={{ fontSize: '0.72rem', fontWeight: 600, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.55)', borderRadius: 999, padding: '2px 9px', cursor: 'pointer', fontFamily: 'inherit' }}>
+            Select all {displayedAssets.length}
+          </button>
+        </div>
       )}
 
       {/* Gallery */}
@@ -738,28 +816,67 @@ export default function ShareView() {
       ) : viewMode === 'list' ? (
         <div style={{ maxWidth: 800, margin: '0 auto' }}>
           {displayedAssets.map((asset, i) => (
-            <ListItem key={asset.id} asset={asset} token={token} onClick={() => openLightbox(i)} />
+            <ListItem
+              key={asset.id} asset={asset} token={token}
+              onClick={() => openLightbox(i)}
+              selectMode={selectMode}
+              selected={selectedIds.has(asset.id)}
+              onToggleSelect={() => toggleSelectItem(asset.id)}
+            />
           ))}
         </div>
       ) : (
         <div style={{ padding: '4px', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 3 }}>
-          {displayedAssets.map((asset, i) => (
-            <div key={asset.id} onClick={() => openLightbox(i)} style={{ aspectRatio: '1', overflow: 'hidden', cursor: 'pointer', background: tileBg, position: 'relative', borderRadius: 3 }}>
-              <img
-                src={`${asset.thumbnailUrl}?t=${t}`}
-                loading="lazy" alt=""
-                style={{ width: '100%', height: '100%', objectFit: 'cover', transition: 'transform 0.25s ease, opacity 0.3s', opacity: 0, display: 'block' }}
-                onLoad={e => { e.target.style.opacity = 1 }}
-                onMouseEnter={e => e.target.style.transform = 'scale(1.06)'}
-                onMouseLeave={e => e.target.style.transform = 'scale(1)'}
-              />
-              {asset.type === 'VIDEO' && (
-                <div style={{ position: 'absolute', bottom: 7, right: 7, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)', borderRadius: 5, padding: '2px 8px', fontSize: '0.7rem', color: '#fff', display: 'flex', alignItems: 'center', gap: 4, fontWeight: 600 }}>
-                  ▶ {asset.duration || 'video'}
-                </div>
-              )}
-            </div>
-          ))}
+          {displayedAssets.map((asset, i) => {
+            const isSelected = selectedIds.has(asset.id)
+            return (
+              <div
+                key={asset.id}
+                className="grid-tile"
+                onClick={() => selectMode ? toggleSelectItem(asset.id) : openLightbox(i)}
+                style={{ aspectRatio: '1', overflow: 'hidden', cursor: 'pointer', background: tileBg, position: 'relative', borderRadius: 3, outline: isSelected ? '2.5px solid #c4a44a' : 'none', outlineOffset: '-2px' }}
+              >
+                <img
+                  src={`${asset.thumbnailUrl}?t=${t}`}
+                  loading="lazy" alt=""
+                  style={{ width: '100%', height: '100%', objectFit: 'cover', transition: 'transform 0.25s ease, opacity 0.3s', opacity: 0, display: 'block' }}
+                  onLoad={e => { e.target.style.opacity = 1 }}
+                  onMouseEnter={e => { if (!selectMode) e.target.style.transform = 'scale(1.06)' }}
+                  onMouseLeave={e => { e.target.style.transform = 'scale(1)' }}
+                />
+                {/* Checkbox overlay */}
+                {(selectMode || isSelected) && (
+                  <div
+                    className={`grid-tile-checkbox${isSelected ? ' checked' : ''}`}
+                    onClick={e => { e.stopPropagation(); toggleSelectItem(asset.id) }}
+                  >
+                    {isSelected && (
+                      <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
+                        <polyline points="2 6 5 9 10 3" stroke="#1a1200" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                    )}
+                  </div>
+                )}
+                {/* Subtle checkbox hint on hover when not in select mode */}
+                {!selectMode && !isSelected && (
+                  <div
+                    className="grid-tile-checkbox-hint"
+                    style={{ opacity: 0, transition: 'opacity 0.15s', position: 'absolute', top: 6, left: 6, width: 22, height: 22, borderRadius: 6, background: 'rgba(0,0,0,0.45)', border: '2px solid rgba(255,255,255,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', zIndex: 2 }}
+                    onClick={e => { e.stopPropagation(); setSelectMode(true); toggleSelectItem(asset.id) }}
+                  />
+                )}
+                {asset.type === 'VIDEO' && (
+                  <div style={{ position: 'absolute', bottom: 7, right: 7, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)', borderRadius: 5, padding: '2px 8px', fontSize: '0.7rem', color: '#fff', display: 'flex', alignItems: 'center', gap: 4, fontWeight: 600 }}>
+                    ▶ {asset.duration || 'video'}
+                  </div>
+                )}
+                {/* Dim overlay for selected items */}
+                {isSelected && (
+                  <div style={{ position: 'absolute', inset: 0, background: 'rgba(196,164,74,0.15)', pointerEvents: 'none' }} />
+                )}
+              </div>
+            )
+          })}
         </div>
       )}
 
