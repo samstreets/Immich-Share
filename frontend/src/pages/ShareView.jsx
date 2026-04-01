@@ -671,7 +671,7 @@ function GalleryControls({ viewMode, setViewMode, sortOrder, setSortOrder, typeF
           display: 'flex', alignItems: 'center', gap: 4,
         }}
         onClick={() => { setSelectMode(v => !v); if (selectMode) onClearSelection() }}
-        title="Select items to download"
+        title="Select items — or hold Shift/Ctrl and drag on the grid"
       >
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
           <polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
@@ -679,7 +679,12 @@ function GalleryControls({ viewMode, setViewMode, sortOrder, setSortOrder, typeF
         {selectMode ? (selectedCount > 0 ? `${selectedCount} selected` : 'Selecting') : 'Select'}
       </button>
       {selectMode && (
-        <button style={{ ...btnStyle(false), fontSize: '0.7rem', padding: '4px 8px' }} onClick={onSelectAll}>All</button>
+        <>
+          <button style={{ ...btnStyle(false), fontSize: '0.7rem', padding: '4px 8px' }} onClick={onSelectAll}>All</button>
+          <span style={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.25)', fontStyle: 'italic', whiteSpace: 'nowrap' }}>
+            drag to select
+          </span>
+        </>
       )}
       <button onClick={onThemeToggle} style={btnStyle(false)} title={dark ? 'Switch to light mode' : 'Switch to dark mode'}>
         {dark ? '☀️' : '🌙'}
@@ -721,7 +726,7 @@ function ListItem({ asset, token, onClick, selectMode, selected, onToggleSelect 
 }
 
 // ── Grid tile with selection highlight ───────────────────────────────────────
-function GridTile({ asset, token, index, selectMode, selected, onToggleSelect, onOpenLightbox }) {
+function GridTile({ asset, token, selectMode, selected, isDragHovered, onToggleSelect, onOpenLightbox }) {
   const t = encodeURIComponent(token)
   const longPressTimer = useRef(null)
   const [pressing, setPressing] = useState(false)
@@ -729,8 +734,7 @@ function GridTile({ asset, token, index, selectMode, selected, onToggleSelect, o
   function handlePointerDown(e) {
     if (e.button !== 0 && e.type !== 'touchstart') return
     longPressTimer.current = setTimeout(() => {
-      // Long press = enter select mode and select this
-      onToggleSelect(true) // signal "enter select mode"
+      onToggleSelect(true)
     }, 500)
     setPressing(true)
   }
@@ -750,28 +754,28 @@ function GridTile({ asset, token, index, selectMode, selected, onToggleSelect, o
     }
   }
 
+  const isHighlighted = selected || isDragHovered
+
   return (
     <div
       onMouseDown={handlePointerDown}
       onMouseUp={cancelLongPress}
       onMouseLeave={cancelLongPress}
       onTouchStart={handlePointerDown}
-      onTouchEnd={e => { cancelLongPress(); }}
+      onTouchEnd={() => cancelLongPress()}
       onClick={handleClick}
       style={{
         aspectRatio: '1',
         overflow: 'hidden',
-        cursor: selectMode ? 'pointer' : 'zoom-in',
+        cursor: selectMode ? 'crosshair' : 'zoom-in',
         position: 'relative',
         borderRadius: 4,
-        // Gold border highlight when selected
-        outline: selected ? '3px solid #c4a44a' : pressing && !selectMode ? '2px solid rgba(196,164,74,0.4)' : '3px solid transparent',
-        outlineOffset: selected ? '-3px' : '-2px',
-        transition: 'outline 0.12s ease, transform 0.12s ease',
+        outline: isHighlighted ? '3px solid #c4a44a' : pressing && !selectMode ? '2px solid rgba(196,164,74,0.4)' : '3px solid transparent',
+        outlineOffset: isHighlighted ? '-3px' : '-2px',
+        transition: 'outline 0.08s ease, transform 0.12s ease',
         transform: pressing && !selectMode ? 'scale(0.97)' : 'scale(1)',
       }}
     >
-      {/* Thumbnail */}
       <img
         src={`${asset.thumbnailUrl}?t=${t}`}
         loading="lazy"
@@ -780,51 +784,52 @@ function GridTile({ asset, token, index, selectMode, selected, onToggleSelect, o
         style={{
           width: '100%', height: '100%', objectFit: 'cover',
           display: 'block',
-          transition: 'opacity 0.3s, transform 0.25s ease, filter 0.2s ease',
+          transition: 'opacity 0.3s, transform 0.25s ease, filter 0.15s ease',
           opacity: 0,
-          filter: selected ? 'brightness(0.75)' : 'brightness(1)',
+          filter: isHighlighted ? 'brightness(0.7)' : 'brightness(1)',
+          pointerEvents: 'none',
         }}
         onLoad={e => { e.target.style.opacity = 1 }}
-        onMouseEnter={e => { if (!selectMode) e.target.style.transform = 'scale(1.06)' }}
+        onMouseEnter={e => { if (!selectMode && !isHighlighted) e.target.style.transform = 'scale(1.06)' }}
         onMouseLeave={e => { e.target.style.transform = 'scale(1)' }}
       />
 
-      {/* Selection overlay glow */}
-      {selected && (
+      {/* Selection overlay */}
+      {isHighlighted && (
         <div style={{
           position: 'absolute', inset: 0,
-          background: 'rgba(196,164,74,0.18)',
+          background: isDragHovered && !selected
+            ? 'rgba(196,164,74,0.25)'
+            : 'rgba(196,164,74,0.18)',
           pointerEvents: 'none',
-          animation: 'selGlow 0.2s ease',
         }} />
       )}
 
-      {/* Checkbox — shown when in select mode OR hovered */}
+      {/* Checkbox */}
       <div
-        className={`tile-checkbox${selected ? ' tile-checkbox--checked' : ''}`}
+        className={`tile-checkbox${isHighlighted ? ' tile-checkbox--checked' : ''}`}
         onClick={e => { e.stopPropagation(); onToggleSelect(false) }}
         style={{
           position: 'absolute', top: 7, left: 7, zIndex: 3,
           width: 22, height: 22, borderRadius: 6,
-          background: selected ? '#c4a44a' : 'rgba(10,12,22,0.65)',
+          background: isHighlighted ? '#c4a44a' : 'rgba(10,12,22,0.65)',
           backdropFilter: 'blur(4px)',
-          border: selected ? '2px solid #c4a44a' : '2px solid rgba(255,255,255,0.4)',
+          border: isHighlighted ? '2px solid #c4a44a' : '2px solid rgba(255,255,255,0.4)',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           opacity: selectMode ? 1 : 0,
-          transition: 'opacity 0.15s, background 0.15s, border-color 0.15s, transform 0.15s',
-          transform: selected ? 'scale(1)' : 'scale(0.85)',
+          transition: 'opacity 0.15s, background 0.1s, border-color 0.1s, transform 0.15s',
+          transform: isHighlighted ? 'scale(1)' : 'scale(0.85)',
           cursor: 'pointer',
-          boxShadow: selected ? '0 0 0 3px rgba(196,164,74,0.25)' : 'none',
+          boxShadow: isHighlighted ? '0 0 0 3px rgba(196,164,74,0.25)' : 'none',
         }}
       >
-        {selected && (
+        {isHighlighted && (
           <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
             <polyline points="2 6 5 9 10 3" stroke="#1a1200" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/>
           </svg>
         )}
       </div>
 
-      {/* Video badge */}
       {asset.type === 'VIDEO' && (
         <div style={{
           position: 'absolute', bottom: 7, right: 7,
@@ -862,6 +867,15 @@ export default function ShareView() {
   const [selectMode, setSelectMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState(new Set())
 
+  // Drag-to-select state
+  const [dragRect, setDragRect] = useState(null)      // { x1,y1,x2,y2 } in viewport coords
+  const [dragHoveredIds, setDragHoveredIds] = useState(new Set())
+  const isDragging = useRef(false)
+  const dragOrigin = useRef(null)
+  const dragInitialSelected = useRef(new Set())        // snapshot of selectedIds at drag start
+  const gridRef = useRef(null)
+  const tileRefs = useRef({})                          // assetId -> DOM element
+
   const displayedAssets = useMemo(() => {
     let list = [...assets]
     if (typeFilter !== 'all') list = list.filter(a => a.type === typeFilter)
@@ -884,6 +898,74 @@ export default function ShareView() {
 
   function selectAll() { setSelectedIds(new Set(displayedAssets.map(a => a.id))) }
   function clearSelection() { setSelectedIds(new Set()) }
+
+  // ── Drag-to-select handlers on the grid container ──────────────────────────
+  function getHoveredIds(rect) {
+    const { x1, y1, x2, y2 } = rect
+    const left = Math.min(x1, x2), right = Math.max(x1, x2)
+    const top  = Math.min(y1, y2), bottom = Math.max(y1, y2)
+    const hovered = new Set()
+    for (const [id, el] of Object.entries(tileRefs.current)) {
+      if (!el) continue
+      const r = el.getBoundingClientRect()
+      // Intersect: tile and selection rect overlap
+      if (r.right > left && r.left < right && r.bottom > top && r.top < bottom) {
+        hovered.add(id)
+      }
+    }
+    return hovered
+  }
+
+  function onGridMouseDown(e) {
+    // Only trigger drag on the grid background itself (or a tile), not on buttons/links
+    if (e.button !== 0) return
+    if (e.target.tagName === 'BUTTON' || e.target.tagName === 'A') return
+    // Must be in select mode OR holding shift/meta for drag-select
+    if (!selectMode && !e.shiftKey && !e.metaKey && !e.ctrlKey) return
+
+    e.preventDefault()
+    isDragging.current = false
+    dragOrigin.current = { x: e.clientX, y: e.clientY }
+    dragInitialSelected.current = new Set(selectedIds)
+
+    function onMouseMove(ev) {
+      const dx = ev.clientX - dragOrigin.current.x
+      const dy = ev.clientY - dragOrigin.current.y
+      if (!isDragging.current && Math.sqrt(dx*dx + dy*dy) < 6) return
+
+      if (!isDragging.current) {
+        isDragging.current = true
+        // Auto-enter select mode
+        setSelectMode(true)
+      }
+
+      const rect = { x1: dragOrigin.current.x, y1: dragOrigin.current.y, x2: ev.clientX, y2: ev.clientY }
+      setDragRect(rect)
+      setDragHoveredIds(getHoveredIds(rect))
+    }
+
+    function onMouseUp(ev) {
+      document.removeEventListener('mousemove', onMouseMove)
+      document.removeEventListener('mouseup', onMouseUp)
+
+      if (isDragging.current) {
+        // Commit: merge dragged tiles into selected
+        const finalRect = { x1: dragOrigin.current.x, y1: dragOrigin.current.y, x2: ev.clientX, y2: ev.clientY }
+        const hovered = getHoveredIds(finalRect)
+        setSelectedIds(prev => {
+          const next = new Set(dragInitialSelected.current)
+          for (const id of hovered) next.add(id)
+          return next
+        })
+        isDragging.current = false
+        setDragRect(null)
+        setDragHoveredIds(new Set())
+      }
+    }
+
+    document.addEventListener('mousemove', onMouseMove)
+    document.addEventListener('mouseup', onMouseUp)
+  }
 
   const openLightbox = useCallback((index) => {
     if (selectMode) return
@@ -1119,15 +1201,32 @@ export default function ShareView() {
           ))}
         </div>
       ) : (
-        <div style={{ padding: '4px', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 3 }}>
+        <div
+          ref={gridRef}
+          onMouseDown={onGridMouseDown}
+          style={{
+            padding: '4px',
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
+            gap: 3,
+            position: 'relative',
+            // Crosshair cursor when dragging or in select mode
+            cursor: selectMode ? 'crosshair' : 'default',
+            userSelect: 'none',
+          }}
+        >
           {displayedAssets.map((asset, i) => (
-            <div key={asset.id} className="grid-tile-wrap">
+            <div
+              key={asset.id}
+              className="grid-tile-wrap"
+              ref={el => { tileRefs.current[asset.id] = el }}
+            >
               <GridTile
                 asset={asset}
                 token={token}
-                index={i}
                 selectMode={selectMode}
                 selected={selectedIds.has(asset.id)}
+                isDragHovered={dragHoveredIds.has(asset.id)}
                 onToggleSelect={(enterMode) => {
                   if (enterMode) {
                     setSelectMode(true)
@@ -1140,6 +1239,36 @@ export default function ShareView() {
               />
             </div>
           ))}
+
+          {/* Drag-select rubber-band rectangle */}
+          {dragRect && (() => {
+            const gridEl = gridRef.current
+            if (!gridEl) return null
+            const gridBounds = gridEl.getBoundingClientRect()
+            const scrollTop = gridEl.closest('.share-view-root')?.scrollTop || 0
+            // Convert viewport coords to grid-relative coords (accounting for scroll)
+            const left   = Math.min(dragRect.x1, dragRect.x2) - gridBounds.left
+            const top    = Math.min(dragRect.y1, dragRect.y2) - gridBounds.top + (gridEl.closest('.share-view-root')?.scrollTop || 0) - (document.documentElement.scrollTop || 0)
+            const width  = Math.abs(dragRect.x2 - dragRect.x1)
+            const height = Math.abs(dragRect.y2 - dragRect.y1)
+            return (
+              <div
+                style={{
+                  position: 'fixed',
+                  left: Math.min(dragRect.x1, dragRect.x2),
+                  top:  Math.min(dragRect.y1, dragRect.y2),
+                  width,
+                  height,
+                  background: 'rgba(196,164,74,0.12)',
+                  border: '1.5px solid rgba(196,164,74,0.6)',
+                  borderRadius: 4,
+                  pointerEvents: 'none',
+                  zIndex: 50,
+                  backdropFilter: 'blur(0px)',
+                }}
+              />
+            )
+          })()}
         </div>
       )}
 
