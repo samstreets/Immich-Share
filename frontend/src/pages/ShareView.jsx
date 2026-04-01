@@ -353,65 +353,279 @@ function UploadPanel({ shareId, sessionToken, onUploaded }) {
   )
 }
 
+// ── Zooming Lightbox ──────────────────────────────────────────────────────────
 function LightBox({ asset, token, onClose, onPrev, onNext, total, index }) {
+  const [zoom, setZoom] = useState(1)
+  const [pan, setPan] = useState({ x: 0, y: 0 })
+  const [isDragging, setIsDragging] = useState(false)
+  const dragStart = useRef(null)
+  const lastPan = useRef({ x: 0, y: 0 })
+  const imgRef = useRef(null)
+
+  // Touch / pinch state
+  const lastTouchDist = useRef(null)
+  const lastTouchMid = useRef(null)
+
+  const MAX_ZOOM = 5
+  const MIN_ZOOM = 1
+
+  // Reset zoom when asset changes
+  useEffect(() => {
+    setZoom(1)
+    setPan({ x: 0, y: 0 })
+  }, [asset?.id])
+
   useEffect(() => {
     function onKey(e) {
-      if (e.key === 'Escape') onClose()
-      if (e.key === 'ArrowLeft') onPrev()
-      if (e.key === 'ArrowRight') onNext()
+      if (e.key === 'Escape') { if (zoom > 1) { setZoom(1); setPan({ x: 0, y: 0 }) } else onClose() }
+      if (zoom <= 1) {
+        if (e.key === 'ArrowLeft') onPrev()
+        if (e.key === 'ArrowRight') onNext()
+      }
+      // + / - zoom shortcuts
+      if (e.key === '+' || e.key === '=') setZoom(z => Math.min(z + 0.5, MAX_ZOOM))
+      if (e.key === '-') setZoom(z => { const next = Math.max(z - 0.5, MIN_ZOOM); if (next === 1) setPan({ x: 0, y: 0 }); return next })
+      if (e.key === '0') { setZoom(1); setPan({ x: 0, y: 0 }) }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onClose, onPrev, onNext])
+  }, [onClose, onPrev, onNext, zoom])
+
+  // Wheel zoom (centered on cursor)
+  function handleWheel(e) {
+    e.preventDefault()
+    const delta = e.deltaY < 0 ? 0.2 : -0.2
+    setZoom(z => {
+      const next = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z + delta))
+      if (next === 1) setPan({ x: 0, y: 0 })
+      return next
+    })
+  }
+
+  // Mouse drag for panning
+  function handleMouseDown(e) {
+    if (zoom <= 1) return
+    e.preventDefault()
+    setIsDragging(true)
+    dragStart.current = { x: e.clientX - pan.x, y: e.clientY - pan.y }
+  }
+
+  function handleMouseMove(e) {
+    if (!isDragging || zoom <= 1) return
+    setPan({ x: e.clientX - dragStart.current.x, y: e.clientY - dragStart.current.y })
+  }
+
+  function handleMouseUp() { setIsDragging(false) }
+
+  // Double-click to zoom in / reset
+  function handleDoubleClick(e) {
+    if (zoom > 1) {
+      setZoom(1); setPan({ x: 0, y: 0 })
+    } else {
+      setZoom(2.5)
+    }
+  }
+
+  // Touch pinch-to-zoom
+  function getTouchDist(touches) {
+    const dx = touches[0].clientX - touches[1].clientX
+    const dy = touches[0].clientY - touches[1].clientY
+    return Math.sqrt(dx * dx + dy * dy)
+  }
+
+  function handleTouchStart(e) {
+    if (e.touches.length === 2) {
+      lastTouchDist.current = getTouchDist(e.touches)
+    } else if (e.touches.length === 1 && zoom > 1) {
+      dragStart.current = { x: e.touches[0].clientX - pan.x, y: e.touches[0].clientY - pan.y }
+      setIsDragging(true)
+    }
+  }
+
+  function handleTouchMove(e) {
+    if (e.touches.length === 2) {
+      e.preventDefault()
+      const dist = getTouchDist(e.touches)
+      if (lastTouchDist.current) {
+        const scale = dist / lastTouchDist.current
+        setZoom(z => {
+          const next = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z * scale))
+          if (next === 1) setPan({ x: 0, y: 0 })
+          return next
+        })
+      }
+      lastTouchDist.current = dist
+    } else if (e.touches.length === 1 && isDragging && zoom > 1) {
+      setPan({ x: e.touches[0].clientX - dragStart.current.x, y: e.touches[0].clientY - dragStart.current.y })
+    }
+  }
+
+  function handleTouchEnd(e) {
+    lastTouchDist.current = null
+    setIsDragging(false)
+  }
 
   const t = encodeURIComponent(token)
   const isVideo = asset.type === 'VIDEO'
+  const isZoomed = zoom > 1
 
   return (
     <div
-      style={{ position: 'fixed', inset: 0, background: 'rgba(6,8,16,0.97)', zIndex: 200, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}
-      onClick={e => e.target === e.currentTarget && onClose()}
+      style={{
+        position: 'fixed', inset: 0,
+        background: 'rgba(6,8,16,0.97)',
+        zIndex: 200, display: 'flex', flexDirection: 'column',
+        alignItems: 'center', justifyContent: 'center',
+        userSelect: 'none',
+      }}
+      onMouseMove={handleMouseMove}
+      onMouseUp={handleMouseUp}
+      onMouseLeave={handleMouseUp}
     >
-      <div style={{ position: 'absolute', top: 0, left: 0, right: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 18px', background: 'linear-gradient(to bottom, rgba(6,8,16,0.8), transparent)', zIndex: 10 }}>
+      {/* Header */}
+      <div style={{
+        position: 'absolute', top: 0, left: 0, right: 0,
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '12px 18px',
+        background: 'linear-gradient(to bottom, rgba(6,8,16,0.85), transparent)',
+        zIndex: 10, pointerEvents: 'auto',
+      }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <div style={{ width: 28, height: 28, borderRadius: 7, fontSize: '0.85rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>📷</div>
-          <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: '0.82rem', fontWeight: 600 }}>{index + 1} / {total}</span>
+          <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: '0.82rem', fontWeight: 600 }}>
+            {index + 1} / {total}
+          </span>
+          {/* Zoom controls */}
+          {!isVideo && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'rgba(255,255,255,0.07)', borderRadius: 8, padding: '3px 4px', border: '1px solid rgba(255,255,255,0.1)' }}>
+              <button
+                onClick={() => { setZoom(z => { const n = Math.max(MIN_ZOOM, z - 0.5); if (n === 1) setPan({x:0,y:0}); return n }) }}
+                disabled={zoom <= 1}
+                style={{ background: 'none', border: 'none', color: zoom <= 1 ? 'rgba(255,255,255,0.2)' : 'rgba(255,255,255,0.7)', cursor: zoom <= 1 ? 'default' : 'pointer', padding: '2px 7px', fontSize: '1rem', lineHeight: 1, borderRadius: 5, transition: 'all 0.12s' }}
+                title="Zoom out (−)"
+              >−</button>
+              <span
+                onClick={() => { setZoom(1); setPan({x:0,y:0}) }}
+                style={{ fontSize: '0.72rem', fontWeight: 700, color: isZoomed ? '#c4a44a' : 'rgba(255,255,255,0.4)', minWidth: 36, textAlign: 'center', cursor: isZoomed ? 'pointer' : 'default', transition: 'color 0.15s' }}
+                title="Reset zoom (0)"
+              >
+                {Math.round(zoom * 100)}%
+              </span>
+              <button
+                onClick={() => setZoom(z => Math.min(MAX_ZOOM, z + 0.5))}
+                disabled={zoom >= MAX_ZOOM}
+                style={{ background: 'none', border: 'none', color: zoom >= MAX_ZOOM ? 'rgba(255,255,255,0.2)' : 'rgba(255,255,255,0.7)', cursor: zoom >= MAX_ZOOM ? 'default' : 'pointer', padding: '2px 7px', fontSize: '1rem', lineHeight: 1, borderRadius: 5, transition: 'all 0.12s' }}
+                title="Zoom in (+)"
+              >+</button>
+            </div>
+          )}
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           {asset.originalUrl && (
-            <a href={`${asset.originalUrl}?t=${t}`} download className="btn btn-secondary btn-sm" style={{ color: 'rgba(255,255,255,0.8)', background: 'rgba(255,255,255,0.08)', borderColor: 'rgba(255,255,255,0.15)' }} onClick={e => e.stopPropagation()}>
+            <a href={`${asset.originalUrl}?t=${t}`} download className="btn btn-secondary btn-sm" style={{ color: 'rgba(255,255,255,0.8)', background: 'rgba(255,255,255,0.08)', borderColor: 'rgba(255,255,255,0.15)' }}>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
               Download
             </a>
           )}
-          <button onClick={onClose} style={{ background: 'rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.8)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 7, padding: '6px 13px', cursor: 'pointer', fontSize: '0.82rem', fontFamily: 'inherit', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 5 }}>
+          <button
+            onClick={() => { if (zoom > 1) { setZoom(1); setPan({x:0,y:0}) } else onClose() }}
+            style={{ background: 'rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.8)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 7, padding: '6px 13px', cursor: 'pointer', fontSize: '0.82rem', fontFamily: 'inherit', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 5 }}
+          >
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-            Close
+            {isZoomed ? 'Reset' : 'Close'}
           </button>
         </div>
       </div>
-      {total > 1 && (
+
+      {/* Prev/Next arrows — hidden when zoomed */}
+      {total > 1 && !isZoomed && (
         <>
           {[{ onClick: onPrev, style: { left: 14 }, icon: '‹' }, { onClick: onNext, style: { right: 14 }, icon: '›' }].map(({ onClick, style: s, icon }) => (
-            <button key={icon} onClick={onClick} style={{ position: 'absolute', top: '50%', transform: 'translateY(-50%)', background: 'rgba(255,255,255,0.08)', backdropFilter: 'blur(8px)', color: '#fff', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '50%', width: 48, height: 48, fontSize: '1.6rem', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1, fontFamily: 'inherit', transition: 'background 0.15s', ...s }}
+            <button key={icon} onClick={onClick} style={{ position: 'absolute', top: '50%', transform: 'translateY(-50%)', background: 'rgba(255,255,255,0.08)', backdropFilter: 'blur(8px)', color: '#fff', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '50%', width: 48, height: 48, fontSize: '1.6rem', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1, fontFamily: 'inherit', transition: 'background 0.15s', zIndex: 5, ...s }}
               onMouseEnter={e => e.currentTarget.style.background = 'rgba(212,168,67,0.2)'}
               onMouseLeave={e => e.currentTarget.style.background = 'rgba(255,255,255,0.08)'}
             >{icon}</button>
           ))}
         </>
       )}
-      <div style={{ maxWidth: '92vw', maxHeight: '82vh' }}>
+
+      {/* Image / Video area */}
+      <div
+        style={{
+          maxWidth: '92vw', maxHeight: '82vh',
+          cursor: isVideo ? 'default' : isZoomed ? (isDragging ? 'grabbing' : 'grab') : 'zoom-in',
+          overflow: 'hidden',
+          position: 'relative',
+        }}
+        onMouseDown={handleMouseDown}
+        onDoubleClick={!isVideo ? handleDoubleClick : undefined}
+        onWheel={!isVideo ? handleWheel : undefined}
+        onTouchStart={!isVideo ? handleTouchStart : undefined}
+        onTouchMove={!isVideo ? handleTouchMove : undefined}
+        onTouchEnd={!isVideo ? handleTouchEnd : undefined}
+        onClick={e => {
+          // Close lightbox if clicking backdrop (not zoomed, not video)
+          if (!isZoomed && e.target === e.currentTarget) onClose()
+        }}
+      >
         {isVideo
-          ? <video key={asset.id} src={`${asset.videoUrl}?t=${t}`} controls autoPlay style={{ maxWidth: '92vw', maxHeight: '82vh', borderRadius: 8, outline: 'none' }} />
-          : <img key={asset.id} src={`${asset.previewUrl}?t=${t}`} alt={asset.originalFileName || ''} style={{ maxWidth: '92vw', maxHeight: '82vh', borderRadius: 8, objectFit: 'contain', display: 'block' }} />
+          ? <video key={asset.id} src={`${asset.videoUrl}?t=${t}`} controls autoPlay style={{ maxWidth: '92vw', maxHeight: '82vh', borderRadius: 8, outline: 'none', display: 'block' }} />
+          : (
+            <img
+              ref={imgRef}
+              key={asset.id}
+              src={`${asset.previewUrl}?t=${t}`}
+              alt={asset.originalFileName || ''}
+              draggable={false}
+              style={{
+                maxWidth: '92vw',
+                maxHeight: '82vh',
+                borderRadius: isZoomed ? 4 : 8,
+                objectFit: 'contain',
+                display: 'block',
+                transform: `scale(${zoom}) translate(${pan.x / zoom}px, ${pan.y / zoom}px)`,
+                transformOrigin: 'center center',
+                transition: isDragging ? 'none' : 'transform 0.15s ease',
+              }}
+            />
+          )
         }
       </div>
+
+      {/* Zoom hint (only shown at zoom=1) */}
+      {!isVideo && !isZoomed && (
+        <div style={{
+          position: 'absolute', bottom: 56, left: '50%', transform: 'translateX(-50%)',
+          fontSize: '0.7rem', color: 'rgba(255,255,255,0.25)', fontWeight: 500,
+          pointerEvents: 'none',
+          display: 'flex', alignItems: 'center', gap: 6,
+        }}>
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+          Scroll or double-click to zoom
+        </div>
+      )}
+
+      {/* Metadata footer */}
       {(asset.originalFileName || asset.fileCreatedAt) && (
-        <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, padding: '14px 20px', background: 'linear-gradient(to top, rgba(6,8,16,0.8), transparent)', color: 'rgba(255,255,255,0.45)', fontSize: '0.78rem', display: 'flex', gap: 20, fontWeight: 500 }}>
+        <div style={{
+          position: 'absolute', bottom: 0, left: 0, right: 0,
+          padding: '14px 20px',
+          background: 'linear-gradient(to top, rgba(6,8,16,0.8), transparent)',
+          color: 'rgba(255,255,255,0.45)', fontSize: '0.78rem',
+          display: 'flex', gap: 20, fontWeight: 500,
+          pointerEvents: 'none',
+        }}>
           {asset.originalFileName && <span>{asset.originalFileName}</span>}
           {asset.fileCreatedAt && <span>{new Date(asset.fileCreatedAt).toLocaleDateString(undefined, { dateStyle: 'medium' })}</span>}
         </div>
       )}
+
+      <style>{`
+        @keyframes spin { to { transform: rotate(360deg) } }
+        .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border-radius: 999px; font-size: 0.8125rem; font-weight: 600; transition: all 0.15s ease; white-space: nowrap; border: 1px solid transparent; text-decoration: none; }
+        .btn-secondary { background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.8); border-color: rgba(255,255,255,0.15); cursor: pointer; font-family: inherit; }
+        .btn-secondary:hover { background: rgba(255,255,255,0.14); }
+        .btn-sm { padding: 5px 14px; font-size: 0.75rem; }
+      `}</style>
     </div>
   )
 }
@@ -451,7 +665,6 @@ function GalleryControls({ viewMode, setViewMode, sortOrder, setSortOrder, typeF
         </button>
       </div>
       <div style={{ width: 1, height: 20, background: 'rgba(255,255,255,0.1)', margin: '0 4px' }} />
-      {/* Select mode toggle */}
       <button
         style={{
           ...btnStyle(selectMode),
@@ -471,43 +684,6 @@ function GalleryControls({ viewMode, setViewMode, sortOrder, setSortOrder, typeF
       <button onClick={onThemeToggle} style={btnStyle(false)} title={dark ? 'Switch to light mode' : 'Switch to dark mode'}>
         {dark ? '☀️' : '🌙'}
       </button>
-    </div>
-  )
-}
-
-// Selection bar shown when items are selected
-function SelectionBar({ selectedCount, totalCount, allowDownload, shareId, sessionToken, shareName, onClearSelection, dark }) {
-  const borderColor = dark ? 'rgba(196,164,74,0.4)' : 'rgba(196,164,74,0.5)'
-  const bg = dark ? 'rgba(196,164,74,0.08)' : 'rgba(196,164,74,0.1)'
-
-  return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: 10, padding: '8px 16px',
-      background: bg, borderBottom: `1px solid ${borderColor}`,
-      flexWrap: 'wrap',
-      animation: 'selBarIn 0.15s ease',
-    }}>
-      <style>{`@keyframes selBarIn { from { opacity:0; transform:translateY(-4px) } }`}</style>
-      <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#c4a44a' }}>
-        {selectedCount} of {totalCount} selected
-      </span>
-      <button
-        onClick={onClearSelection}
-        style={{ fontSize: '0.75rem', fontWeight: 600, background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)', color: 'rgba(255,255,255,0.6)', borderRadius: 999, padding: '3px 10px', cursor: 'pointer', fontFamily: 'inherit' }}
-      >
-        Clear
-      </button>
-      {allowDownload && selectedCount > 0 && (
-        <div style={{ marginLeft: 'auto' }}>
-          <DownloadZipButton
-            shareId={shareId}
-            sessionToken={sessionToken}
-            assetCount={selectedCount}
-            shareName={shareName}
-            selectedIds={null /* passed via props below */}
-          />
-        </div>
-      )}
     </div>
   )
 }
@@ -544,6 +720,127 @@ function ListItem({ asset, token, onClick, selectMode, selected, onToggleSelect 
   )
 }
 
+// ── Grid tile with selection highlight ───────────────────────────────────────
+function GridTile({ asset, token, index, selectMode, selected, onToggleSelect, onOpenLightbox }) {
+  const t = encodeURIComponent(token)
+  const longPressTimer = useRef(null)
+  const [pressing, setPressing] = useState(false)
+
+  function handlePointerDown(e) {
+    if (e.button !== 0 && e.type !== 'touchstart') return
+    longPressTimer.current = setTimeout(() => {
+      // Long press = enter select mode and select this
+      onToggleSelect(true) // signal "enter select mode"
+    }, 500)
+    setPressing(true)
+  }
+
+  function cancelLongPress() {
+    clearTimeout(longPressTimer.current)
+    setPressing(false)
+  }
+
+  function handleClick(e) {
+    clearTimeout(longPressTimer.current)
+    setPressing(false)
+    if (selectMode) {
+      onToggleSelect(false)
+    } else {
+      onOpenLightbox()
+    }
+  }
+
+  return (
+    <div
+      onMouseDown={handlePointerDown}
+      onMouseUp={cancelLongPress}
+      onMouseLeave={cancelLongPress}
+      onTouchStart={handlePointerDown}
+      onTouchEnd={e => { cancelLongPress(); }}
+      onClick={handleClick}
+      style={{
+        aspectRatio: '1',
+        overflow: 'hidden',
+        cursor: selectMode ? 'pointer' : 'zoom-in',
+        position: 'relative',
+        borderRadius: 4,
+        // Gold border highlight when selected
+        outline: selected ? '3px solid #c4a44a' : pressing && !selectMode ? '2px solid rgba(196,164,74,0.4)' : '3px solid transparent',
+        outlineOffset: selected ? '-3px' : '-2px',
+        transition: 'outline 0.12s ease, transform 0.12s ease',
+        transform: pressing && !selectMode ? 'scale(0.97)' : 'scale(1)',
+      }}
+    >
+      {/* Thumbnail */}
+      <img
+        src={`${asset.thumbnailUrl}?t=${t}`}
+        loading="lazy"
+        alt=""
+        draggable={false}
+        style={{
+          width: '100%', height: '100%', objectFit: 'cover',
+          display: 'block',
+          transition: 'opacity 0.3s, transform 0.25s ease, filter 0.2s ease',
+          opacity: 0,
+          filter: selected ? 'brightness(0.75)' : 'brightness(1)',
+        }}
+        onLoad={e => { e.target.style.opacity = 1 }}
+        onMouseEnter={e => { if (!selectMode) e.target.style.transform = 'scale(1.06)' }}
+        onMouseLeave={e => { e.target.style.transform = 'scale(1)' }}
+      />
+
+      {/* Selection overlay glow */}
+      {selected && (
+        <div style={{
+          position: 'absolute', inset: 0,
+          background: 'rgba(196,164,74,0.18)',
+          pointerEvents: 'none',
+          animation: 'selGlow 0.2s ease',
+        }} />
+      )}
+
+      {/* Checkbox — shown when in select mode OR hovered */}
+      <div
+        className={`tile-checkbox${selected ? ' tile-checkbox--checked' : ''}`}
+        onClick={e => { e.stopPropagation(); onToggleSelect(false) }}
+        style={{
+          position: 'absolute', top: 7, left: 7, zIndex: 3,
+          width: 22, height: 22, borderRadius: 6,
+          background: selected ? '#c4a44a' : 'rgba(10,12,22,0.65)',
+          backdropFilter: 'blur(4px)',
+          border: selected ? '2px solid #c4a44a' : '2px solid rgba(255,255,255,0.4)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          opacity: selectMode ? 1 : 0,
+          transition: 'opacity 0.15s, background 0.15s, border-color 0.15s, transform 0.15s',
+          transform: selected ? 'scale(1)' : 'scale(0.85)',
+          cursor: 'pointer',
+          boxShadow: selected ? '0 0 0 3px rgba(196,164,74,0.25)' : 'none',
+        }}
+      >
+        {selected && (
+          <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
+            <polyline points="2 6 5 9 10 3" stroke="#1a1200" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        )}
+      </div>
+
+      {/* Video badge */}
+      {asset.type === 'VIDEO' && (
+        <div style={{
+          position: 'absolute', bottom: 7, right: 7,
+          background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)',
+          borderRadius: 5, padding: '2px 8px',
+          fontSize: '0.7rem', color: '#fff',
+          display: 'flex', alignItems: 'center', gap: 4, fontWeight: 600,
+          pointerEvents: 'none',
+        }}>
+          ▶ {asset.duration || 'video'}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function ShareView() {
   const { shareId } = useParams()
   const { dark, toggle: toggleTheme } = useViewerTheme()
@@ -562,7 +859,6 @@ export default function ShareView() {
   const [sortOrder, setSortOrder] = useState('newest')
   const [typeFilter, setTypeFilter] = useState('all')
 
-  // Selection state
   const [selectMode, setSelectMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState(new Set())
 
@@ -573,7 +869,12 @@ export default function ShareView() {
     return list
   }, [assets, sortOrder, typeFilter])
 
-  function toggleSelectItem(id) {
+  function toggleSelectItem(id, enterSelectMode = false) {
+    if (enterSelectMode && !selectMode) {
+      setSelectMode(true)
+      setSelectedIds(new Set([id]))
+      return
+    }
     setSelectedIds(prev => {
       const next = new Set(prev)
       next.has(id) ? next.delete(id) : next.add(id)
@@ -581,16 +882,11 @@ export default function ShareView() {
     })
   }
 
-  function selectAll() {
-    setSelectedIds(new Set(displayedAssets.map(a => a.id)))
-  }
-
-  function clearSelection() {
-    setSelectedIds(new Set())
-  }
+  function selectAll() { setSelectedIds(new Set(displayedAssets.map(a => a.id))) }
+  function clearSelection() { setSelectedIds(new Set()) }
 
   const openLightbox = useCallback((index) => {
-    if (selectMode) return // don't open lightbox in select mode
+    if (selectMode) return
     setLightbox(index)
     window.history.pushState({ lightbox: true }, '')
   }, [selectMode])
@@ -696,23 +992,24 @@ export default function ShareView() {
     >
       <style>{`
         @keyframes spin { to { transform: rotate(360deg) } }
+        @keyframes selGlow { from { opacity: 0 } to { opacity: 1 } }
+
         .share-view-root::-webkit-scrollbar { width: 8px; }
         .share-view-root::-webkit-scrollbar-track { background: ${scrollbarTrack}; }
         .share-view-root::-webkit-scrollbar-thumb { background: ${scrollbarThumb}; border-radius: 4px; }
         .share-view-root::-webkit-scrollbar-thumb:hover { background: ${dark ? 'rgba(196,164,74,0.75)' : 'rgba(0,0,0,0.45)'}; }
         .share-view-root { scrollbar-width: thin; scrollbar-color: ${scrollbarThumb} ${scrollbarTrack}; }
-        .grid-tile-checkbox {
-          position: absolute; top: 6px; left: 6px; z-index: 2;
-          width: 22px; height: 22px; border-radius: 6px;
-          background: rgba(0,0,0,0.55); backdrop-filter: blur(4px);
-          border: 2px solid rgba(255,255,255,0.35);
-          display: flex; align-items: center; justify-content: center;
-          transition: all 0.12s; cursor: pointer;
+
+        /* Show checkbox on tile hover */
+        .grid-tile-wrap:hover .tile-checkbox {
+          opacity: 1 !important;
+          transform: scale(1) !important;
         }
-        .grid-tile-checkbox.checked {
-          background: #c4a44a; border-color: #c4a44a;
+
+        /* Zoom-in cursor for non-select mode tiles */
+        .grid-tile-wrap:hover img {
+          filter: brightness(0.92);
         }
-        .grid-tile:hover .grid-tile-checkbox-hint { opacity: 1 !important; }
       `}</style>
 
       {/* Header */}
@@ -731,7 +1028,6 @@ export default function ShareView() {
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, flexWrap: 'wrap' }}>
-          {/* Download selected button — shown in header when items are selected and downloads allowed */}
           {shareData.allow_download && selectedIds.size > 0 && (
             <DownloadZipButton
               shareId={shareData.id}
@@ -741,7 +1037,6 @@ export default function ShareView() {
               selectedIds={selectedIdsArray}
             />
           )}
-          {/* Download all — shown when nothing selected */}
           {shareData.allow_download && assets.length > 0 && selectedIds.size === 0 && (
             <DownloadZipButton shareId={shareData.id} sessionToken={token} assetCount={assets.length} shareName={shareData.name} />
           )}
@@ -754,14 +1049,12 @@ export default function ShareView() {
         </div>
       </div>
 
-      {/* Upload panel */}
       {shareData.allow_upload && showUpload && (
         <div style={{ maxWidth: 620, margin: '20px auto 0', padding: '0 16px' }}>
           <UploadPanel shareId={shareId} sessionToken={token} onUploaded={handleUploaded} />
         </div>
       )}
 
-      {/* Gallery controls */}
       {!assetsLoading && assets.length > 0 && (
         <GalleryControls
           viewMode={viewMode} setViewMode={setViewMode}
@@ -776,12 +1069,12 @@ export default function ShareView() {
         />
       )}
 
-      {/* Selection info bar */}
+      {/* Selection bar */}
       {selectMode && selectedIds.size > 0 && (
         <div style={{
           display: 'flex', alignItems: 'center', gap: 10, padding: '8px 16px',
           background: 'rgba(196,164,74,0.08)', borderBottom: '1px solid rgba(196,164,74,0.25)',
-          flexWrap: 'wrap',
+          flexWrap: 'wrap', animation: 'selGlow 0.15s ease',
         }}>
           <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#c4a44a' }}>
             {selectedIds.size} item{selectedIds.size !== 1 ? 's' : ''} selected
@@ -827,56 +1120,26 @@ export default function ShareView() {
         </div>
       ) : (
         <div style={{ padding: '4px', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 3 }}>
-          {displayedAssets.map((asset, i) => {
-            const isSelected = selectedIds.has(asset.id)
-            return (
-              <div
-                key={asset.id}
-                className="grid-tile"
-                onClick={() => selectMode ? toggleSelectItem(asset.id) : openLightbox(i)}
-                style={{ aspectRatio: '1', overflow: 'hidden', cursor: 'pointer', background: tileBg, position: 'relative', borderRadius: 3, outline: isSelected ? '2.5px solid #c4a44a' : 'none', outlineOffset: '-2px' }}
-              >
-                <img
-                  src={`${asset.thumbnailUrl}?t=${t}`}
-                  loading="lazy" alt=""
-                  style={{ width: '100%', height: '100%', objectFit: 'cover', transition: 'transform 0.25s ease, opacity 0.3s', opacity: 0, display: 'block' }}
-                  onLoad={e => { e.target.style.opacity = 1 }}
-                  onMouseEnter={e => { if (!selectMode) e.target.style.transform = 'scale(1.06)' }}
-                  onMouseLeave={e => { e.target.style.transform = 'scale(1)' }}
-                />
-                {/* Checkbox overlay */}
-                {(selectMode || isSelected) && (
-                  <div
-                    className={`grid-tile-checkbox${isSelected ? ' checked' : ''}`}
-                    onClick={e => { e.stopPropagation(); toggleSelectItem(asset.id) }}
-                  >
-                    {isSelected && (
-                      <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
-                        <polyline points="2 6 5 9 10 3" stroke="#1a1200" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/>
-                      </svg>
-                    )}
-                  </div>
-                )}
-                {/* Subtle checkbox hint on hover when not in select mode */}
-                {!selectMode && !isSelected && (
-                  <div
-                    className="grid-tile-checkbox-hint"
-                    style={{ opacity: 0, transition: 'opacity 0.15s', position: 'absolute', top: 6, left: 6, width: 22, height: 22, borderRadius: 6, background: 'rgba(0,0,0,0.45)', border: '2px solid rgba(255,255,255,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', zIndex: 2 }}
-                    onClick={e => { e.stopPropagation(); setSelectMode(true); toggleSelectItem(asset.id) }}
-                  />
-                )}
-                {asset.type === 'VIDEO' && (
-                  <div style={{ position: 'absolute', bottom: 7, right: 7, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)', borderRadius: 5, padding: '2px 8px', fontSize: '0.7rem', color: '#fff', display: 'flex', alignItems: 'center', gap: 4, fontWeight: 600 }}>
-                    ▶ {asset.duration || 'video'}
-                  </div>
-                )}
-                {/* Dim overlay for selected items */}
-                {isSelected && (
-                  <div style={{ position: 'absolute', inset: 0, background: 'rgba(196,164,74,0.15)', pointerEvents: 'none' }} />
-                )}
-              </div>
-            )
-          })}
+          {displayedAssets.map((asset, i) => (
+            <div key={asset.id} className="grid-tile-wrap">
+              <GridTile
+                asset={asset}
+                token={token}
+                index={i}
+                selectMode={selectMode}
+                selected={selectedIds.has(asset.id)}
+                onToggleSelect={(enterMode) => {
+                  if (enterMode) {
+                    setSelectMode(true)
+                    setSelectedIds(new Set([asset.id]))
+                  } else {
+                    toggleSelectItem(asset.id)
+                  }
+                }}
+                onOpenLightbox={() => openLightbox(i)}
+              />
+            </div>
+          ))}
         </div>
       )}
 
