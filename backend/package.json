@@ -19,7 +19,7 @@
     "better-sqlite3": "^9.4.3",
     "otplib": "^12.0.1",
     "qrcode": "^1.5.3",
-    "nodemailer": "^6.9.9"
+    "nodemailer": "^8.0.4"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"
