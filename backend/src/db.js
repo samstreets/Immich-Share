@@ -29,9 +29,22 @@ function initDb() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       username TEXT UNIQUE NOT NULL,
       password_hash TEXT NOT NULL,
+      totp_secret TEXT,
+      totp_enabled INTEGER DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
+
+  // Migrate admin_users: add TOTP columns if missing
+  const adminCols = db.prepare("PRAGMA table_info(admin_users)").all().map(c => c.name);
+  if (!adminCols.includes('totp_secret')) {
+    db.exec(`ALTER TABLE admin_users ADD COLUMN totp_secret TEXT`);
+    console.log('✅ admin_users.totp_secret column added');
+  }
+  if (!adminCols.includes('totp_enabled')) {
+    db.exec(`ALTER TABLE admin_users ADD COLUMN totp_enabled INTEGER DEFAULT 0`);
+    console.log('✅ admin_users.totp_enabled column added');
+  }
 
   // Settings table
   db.exec(`
@@ -65,7 +78,7 @@ function initDb() {
     )
   `);
 
-  // Migrate old schemas
+  // Migrate shares columns
   const cols = db.prepare("PRAGMA table_info(shares)").all().map(c => c.name);
 
   if (!cols.includes('immich_tag_id')) {
@@ -85,15 +98,37 @@ function initDb() {
     db.exec(`ALTER TABLE shares ADD COLUMN upload_tag_ids TEXT`);
     console.log('✅ shares.upload_tag_ids column added');
   }
-  // Auto-tag watcher: tags applied to NEW assets added to the album after share creation
   if (!cols.includes('watch_tag_ids')) {
     db.exec(`ALTER TABLE shares ADD COLUMN watch_tag_ids TEXT`);
     console.log('✅ shares.watch_tag_ids column added');
   }
-  // Stores JSON array of asset IDs seen on the last watcher run (used to detect new assets)
   if (!cols.includes('watch_last_seen_ids')) {
     db.exec(`ALTER TABLE shares ADD COLUMN watch_last_seen_ids TEXT`);
     console.log('✅ shares.watch_last_seen_ids column added');
+  }
+  // Passwordless access token (static token embedded in URL, no password needed)
+  if (!cols.includes('access_token')) {
+    db.exec(`ALTER TABLE shares ADD COLUMN access_token TEXT`);
+    db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_shares_access_token
+      ON shares(access_token) WHERE access_token IS NOT NULL
+    `);
+    console.log('✅ shares.access_token column added');
+  }
+  // Max views before auto-disable (null = unlimited)
+  if (!cols.includes('max_views')) {
+    db.exec(`ALTER TABLE shares ADD COLUMN max_views INTEGER`);
+    console.log('✅ shares.max_views column added');
+  }
+  // Webhook URL called on each upload to this share
+  if (!cols.includes('webhook_url')) {
+    db.exec(`ALTER TABLE shares ADD COLUMN webhook_url TEXT`);
+    console.log('✅ shares.webhook_url column added');
+  }
+  // Email address notified on each upload to this share
+  if (!cols.includes('notify_email')) {
+    db.exec(`ALTER TABLE shares ADD COLUMN notify_email TEXT`);
+    console.log('✅ shares.notify_email column added');
   }
 
   // Share access logs
@@ -162,6 +197,19 @@ function initDb() {
     external_url: `http://localhost:${process.env.PORT || 3000}`,
     app_name: 'Immich Share',
     allowed_origins: '',
+    // Email / SMTP settings
+    smtp_host: '',
+    smtp_port: '587',
+    smtp_user: '',
+    smtp_pass: '',
+    smtp_from: '',
+    smtp_secure: '0',
+    // Global webhook (fired for all shares unless overridden per-share)
+    global_webhook_url: '',
+    global_webhook_secret: '',
+    // Cleanup settings
+    cleanup_expired_shares: '0',
+    cleanup_chunk_max_age_hours: '24',
   };
 
   for (const [key, value] of Object.entries(defaults)) {
@@ -172,6 +220,13 @@ function initDb() {
       if (key === 'immich_api_key' && process.env.IMMICH_API_KEY) seedValue = process.env.IMMICH_API_KEY;
       if (key === 'external_url' && process.env.EXTERNAL_URL) seedValue = process.env.EXTERNAL_URL;
       if (key === 'allowed_origins' && process.env.ALLOWED_ORIGINS) seedValue = process.env.ALLOWED_ORIGINS;
+      if (key === 'smtp_host' && process.env.SMTP_HOST) seedValue = process.env.SMTP_HOST;
+      if (key === 'smtp_port' && process.env.SMTP_PORT) seedValue = process.env.SMTP_PORT;
+      if (key === 'smtp_user' && process.env.SMTP_USER) seedValue = process.env.SMTP_USER;
+      if (key === 'smtp_pass' && process.env.SMTP_PASS) seedValue = process.env.SMTP_PASS;
+      if (key === 'smtp_from' && process.env.SMTP_FROM) seedValue = process.env.SMTP_FROM;
+      if (key === 'global_webhook_url' && process.env.GLOBAL_WEBHOOK_URL) seedValue = process.env.GLOBAL_WEBHOOK_URL;
+      if (key === 'global_webhook_secret' && process.env.GLOBAL_WEBHOOK_SECRET) seedValue = process.env.GLOBAL_WEBHOOK_SECRET;
       db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run(key, seedValue || value);
     }
   }

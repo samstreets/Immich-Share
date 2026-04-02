@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useSearchParams } from 'react-router-dom'
 
 async function safeFetch(url, options = {}) {
   const res = await fetch(url, options)
@@ -849,6 +849,21 @@ function GridTile({ asset, token, selectMode, selected, isDragHovered, onToggleS
 export default function ShareView() {
   const { shareId } = useParams()
   const { dark, toggle: toggleTheme } = useViewerTheme()
+  const [searchParams] = useSearchParams()
+  // Passwordless access: if ?k=<token> is in the URL, call the token-access
+  // endpoint automatically — no password gate is shown.
+  useEffect(() => {
+    const k = searchParams.get('k')
+    if (!k || shareData) return   // already unlocked or no token
+    safeFetch(`/api/public/token-access/${shareId}?k=${encodeURIComponent(k)}`)
+    .then(({ ok, data }) => {
+      if (ok && data.sessionToken) {
+        handleUnlock(data)
+      }
+    // If token is invalid, fall through to normal password gate
+    })
+    .catch(() => {})
+  }, [shareId, searchParams])
 
   const [shareInfo, setShareInfo] = useState(null)
   const [infoLoading, setInfoLoading] = useState(true)

@@ -2,6 +2,7 @@ const express = require('express');
 const { getDb } = require('../db');
 const { requireAuth } = require('../middleware/auth');
 const { getAlbums, getAlbum, getTags, testConnection, createAlbum, createTag, tagAssets } = require('../immich');
+const { sendEmail, fireWebhook } = require('../notifications');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -13,13 +14,11 @@ router.get('/settings', (req, res) => {
   const settings = {};
   for (const row of rows) {
     if (row.key === 'immich_api_key' && row.value) {
-      // C2 FIX: always mask the API key — never expose it in any GET response.
-      // The original codebase had a separate GET /settings/api-key endpoint that
-      // returned the raw key to any authenticated caller. That endpoint is removed.
-      // The key is write-only after initial save: admins can overwrite it via PUT
-      // /settings but can never read it back. This limits blast radius if the
-      // admin JWT is compromised.
       settings[row.key] = '••••••••' + row.value.slice(-4);
+    } else if (row.key === 'smtp_pass' && row.value) {
+      settings[row.key] = '••••••••';
+    } else if (row.key === 'global_webhook_secret' && row.value) {
+      settings[row.key] = '••••••••';
     } else {
       settings[row.key] = row.value;
     }
@@ -28,17 +27,25 @@ router.get('/settings', (req, res) => {
 });
 
 // Update settings
-// NOTE: the API key can be written here (and will be stored), but it cannot be
-// read back. The frontend should treat the key field as a write-only input and
-// show the masked value returned by GET /settings.
 router.put('/settings', (req, res) => {
   const db = getDb();
-  const allowed = ['immich_url', 'immich_api_key', 'external_url', 'app_name', 'allowed_origins'];
+  const allowed = [
+    'immich_url', 'immich_api_key', 'external_url', 'app_name', 'allowed_origins',
+    // Email / SMTP
+    'smtp_host', 'smtp_port', 'smtp_user', 'smtp_pass', 'smtp_from', 'smtp_secure',
+    // Webhooks
+    'global_webhook_url', 'global_webhook_secret',
+    // Cleanup
+    'cleanup_expired_shares', 'cleanup_chunk_max_age_hours',
+  ];
 
   const update = db.prepare('INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)');
 
   const updateMany = db.transaction((updates) => {
     for (const [key, value] of updates) {
+      // Don't overwrite secrets if the client sent the masked placeholder
+      if ((key === 'smtp_pass' || key === 'global_webhook_secret') && value === '••••••••') continue;
+      if (key === 'immich_api_key' && value && value.startsWith('••••••••')) continue;
       update.run(key, value);
     }
   });
@@ -49,16 +56,45 @@ router.put('/settings', (req, res) => {
   res.json({ message: 'Settings saved' });
 });
 
-// C2 FIX: GET /settings/api-key endpoint removed entirely.
-// Previously it returned the raw Immich API key to any authenticated admin,
-// meaning a stolen JWT gave an attacker full Immich access immediately.
-// The key is now strictly write-only. If you need to rotate the key, use
-// PUT /settings with the new value.
-
 // Test Immich connection
 router.get('/immich/test', async (req, res) => {
   const result = await testConnection();
   res.json(result);
+});
+
+// Test email configuration — sends a test message to the given address
+router.post('/notifications/test-email', async (req, res) => {
+  const { to } = req.body;
+  if (!to) return res.status(400).json({ error: 'Recipient email (to) is required' });
+
+  const db = getDb();
+  const appNameRow = db.prepare("SELECT value FROM settings WHERE key = 'app_name'").get();
+  const appName = appNameRow?.value || 'Immich Share';
+
+  try {
+    await sendEmail({
+      to,
+      subject: `[${appName}] Test email`,
+      text: `This is a test email from ${appName}. If you received this, your SMTP settings are working correctly.`,
+      html: `<p>This is a test email from <strong>${appName}</strong>. If you received this, your SMTP settings are working correctly.</p>`,
+    });
+    res.json({ ok: true, message: `Test email sent to ${to}` });
+  } catch (err) {
+    res.status(502).json({ ok: false, error: err.message });
+  }
+});
+
+// Test webhook — fires a test payload to the given URL
+router.post('/notifications/test-webhook', async (req, res) => {
+  const { url, secret } = req.body;
+  if (!url) return res.status(400).json({ error: 'url is required' });
+
+  try {
+    await fireWebhook(url, { event: 'test', timestamp: new Date().toISOString(), message: 'Webhook test from Immich Share' }, secret || null);
+    res.json({ ok: true, message: `Webhook fired to ${url}` });
+  } catch (err) {
+    res.status(502).json({ ok: false, error: err.message });
+  }
 });
 
 // List Immich albums
@@ -85,7 +121,7 @@ router.post('/immich/albums', async (req, res) => {
   }
 });
 
-// Get Immich album details (includes assets array)
+// Get Immich album details
 router.get('/immich/albums/:id', async (req, res) => {
   try {
     const album = await getAlbum(req.params.id);
@@ -119,8 +155,7 @@ router.post('/immich/tags', async (req, res) => {
   }
 });
 
-// Apply a tag to a list of assets  PUT /admin/immich/tags/:tagId/assets
-// Body: { ids: string[] }
+// Apply a tag to a list of assets
 router.put('/immich/tags/:tagId/assets', async (req, res) => {
   const { tagId } = req.params;
   const { ids } = req.body;
@@ -193,6 +228,68 @@ router.get('/logs', (req, res) => {
   `).get(...params);
 
   res.json({ logs: rows, total: totalRow.count, limit, offset });
+});
+
+// ── Log export (CSV or JSON) ──────────────────────────────────────────────────
+router.get('/logs/export', (req, res) => {
+  const db = getDb();
+  const format = (req.query.format || 'csv').toLowerCase();
+  const action = req.query.action || null;
+  const days   = parseInt(req.query.days || '0', 10); // 0 = all time
+
+  let where = 'WHERE 1=1';
+  const params = [];
+
+  if (action) {
+    where += ' AND l.action = ?';
+    params.push(action);
+  }
+  if (days > 0) {
+    where += ` AND l.accessed_at >= datetime('now', '-' || ? || ' days')`;
+    params.push(days);
+  }
+
+  const rows = db.prepare(`
+    SELECT
+      l.id,
+      l.share_id,
+      COALESCE(l.share_name, s.name, l.share_id) AS share_name,
+      l.ip_address,
+      l.user_agent,
+      l.action,
+      l.accessed_at
+    FROM access_logs l
+    LEFT JOIN shares s ON s.id = l.share_id
+    ${where}
+    ORDER BY l.accessed_at DESC
+    LIMIT 50000
+  `).all(...params);
+
+  if (format === 'json') {
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', 'attachment; filename="access_logs.json"');
+    return res.send(JSON.stringify(rows, null, 2));
+  }
+
+  // Default: CSV
+  const cols = ['id', 'share_id', 'share_name', 'ip_address', 'user_agent', 'action', 'accessed_at'];
+  const escape = (val) => {
+    if (val == null) return '';
+    const s = String(val);
+    if (s.includes(',') || s.includes('"') || s.includes('\n')) {
+      return '"' + s.replace(/"/g, '""') + '"';
+    }
+    return s;
+  };
+
+  const csv = [
+    cols.join(','),
+    ...rows.map(r => cols.map(c => escape(r[c])).join(',')),
+  ].join('\n');
+
+  res.setHeader('Content-Type', 'text/csv');
+  res.setHeader('Content-Disposition', 'attachment; filename="access_logs.csv"');
+  res.send(csv);
 });
 
 router.get('/logs/summary', (req, res) => {

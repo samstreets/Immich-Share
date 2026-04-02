@@ -16,7 +16,10 @@
     "node-fetch": "^2.7.0",
     "uuid": "^9.0.0",
     "dotenv": "^16.3.1",
-    "better-sqlite3": "^9.4.3"
+    "better-sqlite3": "^9.4.3",
+    "otplib": "^12.0.1",
+    "qrcode": "^1.5.3",
+    "nodemailer": "^6.9.9"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"

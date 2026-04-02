@@ -6,18 +6,13 @@ const pathLib = require('path');
 const { getDb } = require('../db');
 const { getAlbum, getAssetsByTag, proxyAssetOriginal, tagAssets } = require('../immich');
 const { makeToken, verifyToken } = require('../shareSession');
+const { notifyUpload } = require('../notifications');
+
 const router = express.Router();
 
-// H3 FIX: hard limits for chunked uploads.
-// totalChunks came from the client's form field with no server-side cap,
-// allowing an attacker to fill /tmp by sending hundreds of thousands of 50 MB
-// chunks. We now enforce both a per-upload chunk count ceiling and a cumulative
-// byte ceiling. These values match the frontend CHUNK_SIZE of 50 MB.
-const MAX_CHUNKS        = 400;                        // 400 × 50 MB = 20 GB max per upload
-const MAX_UPLOAD_BYTES  = MAX_CHUNKS * 50 * 1024 * 1024; // 20 GB
-const CHUNK_SIZE_BYTES  = 50 * 1024 * 1024;           // must match frontend CHUNK_SIZE
-
-// H4 FIX: uploadId must be a UUID to prevent path traversal.
+const MAX_CHUNKS        = 400;
+const MAX_UPLOAD_BYTES  = MAX_CHUNKS * 50 * 1024 * 1024;
+const CHUNK_SIZE_BYTES  = 50 * 1024 * 1024;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function logAccess(share, req, action = 'view') {
@@ -40,7 +35,6 @@ function logAccess(share, req, action = 'view') {
 
 function getActiveShare(id) {
   const db = getDb();
-  // Accept either UUID id OR custom slug
   const share = db.prepare(
     'SELECT * FROM shares WHERE (id = ? OR slug = ?) AND is_active = 1'
   ).get(id, id);
@@ -49,8 +43,7 @@ function getActiveShare(id) {
   return share;
 }
 
-// Public share info (no auth) — used by the password gate page
-// Accepts both UUID and slug
+// Public share info (no auth)
 router.get('/info/:id', (req, res) => {
   const db = getDb();
   const share = db.prepare(
@@ -76,7 +69,53 @@ router.get('/info/healthcheck', (req, res) => {
   res.json({ status: 'ok' });
 });
 
-// Verify password -> short-lived HMAC session token
+// ── Passwordless access via token-in-URL ──────────────────────────────────────
+// GET /api/public/token-access/:id?k=<access_token>
+// Returns the same shape as POST /verify so the frontend can treat them
+// identically after the initial gate check.
+router.get('/token-access/:id', (req, res) => {
+  const { k } = req.query;
+  if (!k) return res.status(400).json({ error: 'Access token (k) required' });
+
+  const share = getActiveShare(req.params.id);
+  if (!share) return res.status(404).json({ error: 'Share not found or inactive' });
+
+  // Constant-time comparison to prevent timing attacks
+  const crypto = require('crypto');
+  if (!share.access_token) return res.status(403).json({ error: 'Passwordless access not enabled for this share' });
+
+  let match = false;
+  try {
+    match = crypto.timingSafeEqual(
+      Buffer.from(k, 'utf8'),
+      Buffer.from(share.access_token, 'utf8')
+    );
+  } catch {
+    match = false;
+  }
+
+  if (!match) return res.status(401).json({ error: 'Invalid access token' });
+
+  logAccess(share, req, 'view');
+
+  const sessionToken = makeToken(share.id);
+  res.json({
+    id: share.id,
+    slug: share.slug,
+    name: share.name,
+    description: share.description,
+    share_type: share.share_type,
+    allow_download: share.allow_download === 1,
+    allow_upload: share.allow_upload === 1,
+    show_metadata: share.show_metadata === 1,
+    upload_tag_ids: share.upload_tag_ids || null,
+    sessionToken,
+    verified: true,
+    passwordless: true,
+  });
+});
+
+// Verify password -> session token
 router.post('/verify/:id', async (req, res) => {
   const { password } = req.body;
   if (!password) return res.status(400).json({ error: 'Password required' });
@@ -89,7 +128,6 @@ router.post('/verify/:id', async (req, res) => {
 
   logAccess(share, req, 'view');
 
-  // Always issue token keyed to the real UUID (not slug)
   const sessionToken = makeToken(share.id);
   res.json({
     id: share.id,
@@ -100,7 +138,6 @@ router.post('/verify/:id', async (req, res) => {
     allow_download: share.allow_download === 1,
     allow_upload: share.allow_upload === 1,
     show_metadata: share.show_metadata === 1,
-    // Pass upload_tag_ids so the frontend can show which tags will be applied
     upload_tag_ids: share.upload_tag_ids || null,
     sessionToken,
     verified: true,
@@ -112,7 +149,6 @@ router.post('/content/:id', async (req, res) => {
   const { sessionToken } = req.body;
   if (!sessionToken) return res.status(400).json({ error: 'Session token required' });
 
-  // Resolve slug -> id if needed
   const share = getActiveShare(req.params.id);
   if (!share) return res.status(404).json({ error: 'Share not found' });
 
@@ -170,16 +206,16 @@ router.get('/zip/:id', async (req, res) => {
       assets = await getAssetsByTag(share.immich_tag_id);
     }
 
-    const idsParam = req.query.ids
+    const idsParam = req.query.ids;
     if (idsParam) {
       const allowed = new Set(
         idsParam.split(',').map(s => s.trim()).filter(s => UUID_RE.test(s))
-      )
-      assets = assets.filter(a => allowed.has(a.id))
+      );
+      assets = assets.filter(a => allowed.has(a.id));
     }
 
     if (assets.length === 0) {
-      return res.status(404).send('No assets found')
+      return res.status(404).send('No assets found');
     }
 
     const safeName = share.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 60) || 'share';
@@ -282,7 +318,6 @@ router.get('/zip/:id', async (req, res) => {
     eocd.writeUInt16LE(0, 20);
     res.write(eocd);
     res.end();
-
   } catch (err) {
     if (!res.headersSent) {
       res.status(502).send(`ZIP generation failed: ${err.message}`);
@@ -290,7 +325,7 @@ router.get('/zip/:id', async (req, res) => {
   }
 });
 
-// ── Helper: apply upload tags to an asset ────────────────────────────────────
+// ── Helper: apply upload tags ────────────────────────────────────────────────
 async function applyUploadTags(share, assetId) {
   if (!share.upload_tag_ids) return;
   const tagIds = share.upload_tag_ids.split(',').map(s => s.trim()).filter(Boolean);
@@ -303,7 +338,7 @@ async function applyUploadTags(share, assetId) {
   }
 }
 
-// ── Original single-request upload ───────────────────────────────────────────
+// ── Single-request upload ─────────────────────────────────────────────────────
 router.post('/upload/:id', async (req, res) => {
   const sessionToken = req.query.t;
   if (!sessionToken) return res.status(400).json({ error: 'Session token required' });
@@ -358,9 +393,10 @@ router.post('/upload/:id', async (req, res) => {
       }
     }
 
-    // Apply upload tags if configured
     if (uploadData.id) {
       await applyUploadTags(share, uploadData.id);
+      // Fire notifications asynchronously — don't block the response
+      notifyUpload(share, { assetId: uploadData.id, filename: null, ip: req.ip }).catch(() => {});
     }
 
     logAccess(share, req, 'upload');
@@ -370,7 +406,7 @@ router.post('/upload/:id', async (req, res) => {
   }
 });
 
-// ── Chunked upload: receive one chunk ────────────────────────────────────────
+// ── Chunked upload: receive one chunk ─────────────────────────────────────────
 router.post('/upload-chunk/:id', async (req, res) => {
   const sessionToken = req.query.t;
   if (!sessionToken) return res.status(400).json({ error: 'Session token required' });
@@ -413,52 +449,41 @@ router.post('/upload-chunk/:id', async (req, res) => {
     return res.status(400).json({ error: 'Missing required chunk fields' });
   }
 
-  // H3 FIX: validate uploadId is a UUID to prevent path traversal (H4).
   if (!UUID_RE.test(uploadId)) {
     return res.status(400).json({ error: 'Invalid uploadId format' });
   }
 
-  // H3 FIX: enforce server-side caps on chunk count and individual chunk size.
   const parsedTotal  = parseInt(totalChunks, 10);
   const parsedIndex  = parseInt(chunkIndex, 10);
 
   if (isNaN(parsedTotal) || parsedTotal < 1 || parsedTotal > MAX_CHUNKS) {
-    return res.status(400).json({
-      error: `totalChunks must be between 1 and ${MAX_CHUNKS}`,
-    });
+    return res.status(400).json({ error: `totalChunks must be between 1 and ${MAX_CHUNKS}` });
   }
   if (isNaN(parsedIndex) || parsedIndex < 0 || parsedIndex >= parsedTotal) {
     return res.status(400).json({ error: 'Invalid chunkIndex' });
   }
   if (chunkBuffer.length > CHUNK_SIZE_BYTES) {
-    return res.status(413).json({
-      error: `Chunk exceeds maximum size of ${CHUNK_SIZE_BYTES / 1024 / 1024} MB`,
-    });
+    return res.status(413).json({ error: `Chunk exceeds maximum size of ${CHUNK_SIZE_BYTES / 1024 / 1024} MB` });
   }
 
-  // H3 FIX: check that writing this chunk won't exceed the total upload cap.
   const tmpDir = pathLib.join(os.tmpdir(), 'immich-share-chunks', uploadId);
-  fs.mkdirSync(tmpDir, { recursive: true, mode: 0o700 }); // C3 FIX: 0o700, not default 0o777
+  fs.mkdirSync(tmpDir, { recursive: true, mode: 0o700 });
 
-  // Sum existing chunks to enforce cumulative byte cap.
   let existingBytes = 0;
   try {
     const existing = fs.readdirSync(tmpDir).filter(f => f.startsWith('chunk_'));
     for (const f of existing) {
       existingBytes += fs.statSync(pathLib.join(tmpDir, f)).size;
     }
-  } catch { /* first chunk — directory may not exist yet */ }
+  } catch {}
 
   if (existingBytes + chunkBuffer.length > MAX_UPLOAD_BYTES) {
-    // Clean up to avoid leaving orphaned data
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
-    return res.status(413).json({
-      error: `Upload exceeds maximum total size of ${MAX_UPLOAD_BYTES / 1024 / 1024 / 1024} GB`,
-    });
+    return res.status(413).json({ error: `Upload exceeds maximum total size of ${MAX_UPLOAD_BYTES / 1024 / 1024 / 1024} GB` });
   }
 
   const chunkPath = pathLib.join(tmpDir, `chunk_${String(parsedIndex).padStart(6, '0')}`);
-  fs.writeFileSync(chunkPath, chunkBuffer, { mode: 0o600 }); // C3 FIX: restrictive permissions
+  fs.writeFileSync(chunkPath, chunkBuffer, { mode: 0o600 });
 
   const metaPath = pathLib.join(tmpDir, 'meta.json');
   if (!fs.existsSync(metaPath)) {
@@ -468,14 +493,10 @@ router.post('/upload-chunk/:id', async (req, res) => {
       filename: filename || uploadId,
       shareId: share.id,
       createdAt: Date.now(),
-    }), { mode: 0o600 }); // C3 FIX
+    }), { mode: 0o600 });
   }
 
-  return res.json({
-    ok: true,
-    received: parsedIndex + 1,
-    total: parsedTotal,
-  });
+  return res.json({ ok: true, received: parsedIndex + 1, total: parsedTotal });
 });
 
 // ── Chunked upload: assemble and forward to Immich ────────────────────────────
@@ -491,7 +512,6 @@ router.post('/upload-assemble/:id', async (req, res) => {
   const { uploadId, filename, deviceAssetId, fileCreatedAt, fileModifiedAt } = req.body;
   if (!uploadId || !filename) return res.status(400).json({ error: 'Missing uploadId or filename' });
 
-  // H4 FIX: validate uploadId before using it in a path.
   if (!UUID_RE.test(uploadId)) {
     return res.status(400).json({ error: 'Invalid uploadId format' });
   }
@@ -510,8 +530,6 @@ router.post('/upload-assemble/:id', async (req, res) => {
     return res.status(500).json({ error: 'Could not read upload session metadata' });
   }
 
-  // H3 FIX: re-validate totalChunks from stored meta (not the request body)
-  // to prevent an attacker from lying about the chunk count at assembly time.
   if (meta.totalChunks > MAX_CHUNKS) {
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
     return res.status(400).json({ error: 'Stored chunk count exceeds server limit' });
@@ -584,12 +602,10 @@ router.post('/upload-assemble/:id', async (req, res) => {
     }
 
     const assetId = uploadData.id;
-
     if (!assetId) {
       throw new Error('Immich did not return an asset ID. Response: ' + JSON.stringify(uploadData));
     }
 
-    // Add to album if applicable
     if (share.share_type === 'album') {
       const albumRes = await fetch(`${immichUrl}/api/albums/${share.immich_album_id}/assets`, {
         method: 'PUT',
@@ -600,8 +616,8 @@ router.post('/upload-assemble/:id', async (req, res) => {
       if (!albumRes.ok) {
         const albumErr = await albumRes.text();
         console.error(`[upload-assemble] Failed to add asset ${assetId} to album: ${albumRes.status} ${albumErr}`);
-        // Upload succeeded but album add failed
         await applyUploadTags(share, assetId);
+        notifyUpload(share, { assetId, filename, ip: req.ip }).catch(() => {});
         logAccess(share, req, 'upload');
         return res.json({
           success: true,
@@ -609,13 +625,12 @@ router.post('/upload-assemble/:id', async (req, res) => {
           warning: `File uploaded to Immich but could not be added to the album (HTTP ${albumRes.status}). Check server logs.`,
         });
       }
-
-      const albumData = await albumRes.json();
-      console.log(`[upload-assemble] Album add result:`, JSON.stringify(albumData));
     }
 
-    // Apply upload tags if configured on this share
     await applyUploadTags(share, assetId);
+
+    // Fire email + webhook notifications asynchronously
+    notifyUpload(share, { assetId, filename, ip: req.ip }).catch(() => {});
 
     logAccess(share, req, 'upload');
     res.json({ success: true, assetId });
@@ -628,7 +643,7 @@ router.post('/upload-assemble/:id', async (req, res) => {
   }
 });
 
-// ── Chunked upload: cancel / clean up ────────────────────────────────────────
+// ── Chunked upload: cancel ────────────────────────────────────────────────────
 router.delete('/upload-chunk/:id/:uploadId', (req, res) => {
   const sessionToken = req.query.t;
   if (!sessionToken) return res.status(400).json({ error: 'Session token required' });
@@ -638,7 +653,6 @@ router.delete('/upload-chunk/:id/:uploadId', (req, res) => {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  // H4 FIX: validate uploadId before using it in a path.
   if (!UUID_RE.test(req.params.uploadId)) {
     return res.status(400).json({ error: 'Invalid uploadId format' });
   }
@@ -651,7 +665,6 @@ router.delete('/upload-chunk/:id/:uploadId', (req, res) => {
 });
 
 // ── ZIP helpers ───────────────────────────────────────────────────────────────
-
 function makeCrc32Table() {
   const table = new Uint32Array(256);
   for (let i = 0; i < 256; i++) {
@@ -671,7 +684,6 @@ function dosDateTime(d) {
 }
 
 // ── Chunked upload helpers ────────────────────────────────────────────────────
-
 function parseMultipart(body, boundary) {
   const parts = [];
   const boundaryBuf = Buffer.from('\r\n--' + boundary);

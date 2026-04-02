@@ -6,13 +6,6 @@ const { getDb } = require('../db');
 
 const router = express.Router();
 
-// H1 FIX: Fail hard at startup if JWT_SECRET is missing or too short.
-// The original code silently fell back to a well-known literal string
-// ("change-me-in-production-..."), meaning any deployment that omitted the env
-// var could have its admin tokens trivially forged by anyone who had read the
-// source. We now throw at require-time so the process never starts in an
-// insecure state. The minimum 32-character requirement gives ≥256 bits of
-// entropy when the secret is random ASCII, which is sufficient for HS256.
 const JWT_SECRET = process.env.JWT_SECRET;
 
 if (!JWT_SECRET) {
@@ -50,6 +43,9 @@ function signToken(payload) {
 }
 
 // POST /api/auth/login
+// If TOTP is enabled the response includes { totpRequired: true } and a
+// short-lived pre-auth token instead of a full admin token.  The client
+// must then call POST /api/auth/totp-verify with that pre-auth token + code.
 router.post('/login', async (req, res) => {
   const { username, password } = req.body;
   if (!username || !password) {
@@ -67,8 +63,140 @@ router.post('/login', async (req, res) => {
     return res.status(401).json({ error: 'Invalid credentials' });
   }
 
+  if (user.totp_enabled && user.totp_secret) {
+    // Issue a short-lived pre-auth token so the TOTP step can be authenticated
+    const preToken = jwt.sign(
+      { id: user.id, username: user.username, preAuth: true },
+      JWT_SECRET,
+      { expiresIn: '5m' }
+    );
+    return res.json({ totpRequired: true, preToken });
+  }
+
   const token = signToken({ id: user.id, username: user.username });
   res.json({ token, username: user.username });
+});
+
+// POST /api/auth/totp-verify  — second factor after password
+router.post('/totp-verify', (req, res) => {
+  const { preToken, code } = req.body;
+  if (!preToken || !code) {
+    return res.status(400).json({ error: 'preToken and code are required' });
+  }
+
+  let payload;
+  try {
+    payload = jwt.verify(preToken, JWT_SECRET);
+  } catch {
+    return res.status(401).json({ error: 'Pre-auth token invalid or expired' });
+  }
+
+  if (!payload.preAuth) {
+    return res.status(401).json({ error: 'Invalid pre-auth token' });
+  }
+
+  const db = getDb();
+  const user = db.prepare('SELECT * FROM admin_users WHERE id = ?').get(payload.id);
+  if (!user || !user.totp_secret) {
+    return res.status(401).json({ error: 'TOTP not configured' });
+  }
+
+  let totp;
+  try { totp = require('otplib').totp; } catch {
+    return res.status(500).json({ error: 'otplib not installed' });
+  }
+
+  if (!totp.check(code.replace(/\s/g, ''), user.totp_secret)) {
+    return res.status(401).json({ error: 'Invalid TOTP code' });
+  }
+
+  const token = signToken({ id: user.id, username: user.username });
+  res.json({ token, username: user.username });
+});
+
+// POST /api/auth/totp-enroll  — generate a new secret and return QR code URI
+router.post('/totp-enroll', requireAuth, async (req, res) => {
+  const db = getDb();
+  const user = db.prepare('SELECT * FROM admin_users WHERE id = ?').get(req.admin.id);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+
+  if (user.totp_enabled) {
+    return res.status(409).json({ error: 'TOTP is already enabled. Disable it first.' });
+  }
+
+  let authenticator, QRCode;
+  try {
+    authenticator = require('otplib').authenticator;
+    QRCode = require('qrcode');
+  } catch {
+    return res.status(500).json({ error: 'otplib/qrcode not installed — run npm install' });
+  }
+
+  const secret = authenticator.generateSecret();
+  const appName = (() => {
+    try {
+      const row = db.prepare("SELECT value FROM settings WHERE key = 'app_name'").get();
+      return row?.value || 'ImmichShare';
+    } catch { return 'ImmichShare'; }
+  })();
+
+  const otpauth = authenticator.keyuri(user.username, appName, secret);
+  const qrDataUrl = await QRCode.toDataURL(otpauth);
+
+  // Store the secret but don't enable yet — user must confirm with a valid code
+  db.prepare('UPDATE admin_users SET totp_secret = ? WHERE id = ?').run(secret, user.id);
+
+  res.json({ secret, otpauth, qrDataUrl });
+});
+
+// POST /api/auth/totp-confirm  — confirm enrollment with a valid code
+router.post('/totp-confirm', requireAuth, (req, res) => {
+  const { code } = req.body;
+  if (!code) return res.status(400).json({ error: 'code is required' });
+
+  const db = getDb();
+  const user = db.prepare('SELECT * FROM admin_users WHERE id = ?').get(req.admin.id);
+  if (!user || !user.totp_secret) {
+    return res.status(400).json({ error: 'Run /totp-enroll first' });
+  }
+  if (user.totp_enabled) {
+    return res.status(409).json({ error: 'TOTP already enabled' });
+  }
+
+  let totp;
+  try { totp = require('otplib').totp; } catch {
+    return res.status(500).json({ error: 'otplib not installed' });
+  }
+
+  if (!totp.check(code.replace(/\s/g, ''), user.totp_secret)) {
+    return res.status(401).json({ error: 'Invalid TOTP code — try again' });
+  }
+
+  db.prepare('UPDATE admin_users SET totp_enabled = 1 WHERE id = ?').run(user.id);
+  res.json({ message: 'TOTP enabled successfully' });
+});
+
+// POST /api/auth/totp-disable
+router.post('/totp-disable', requireAuth, async (req, res) => {
+  const { password } = req.body;
+  if (!password) return res.status(400).json({ error: 'Current password is required to disable TOTP' });
+
+  const db = getDb();
+  const user = db.prepare('SELECT * FROM admin_users WHERE id = ?').get(req.admin.id);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+
+  const valid = await bcrypt.compare(password, user.password_hash);
+  if (!valid) return res.status(401).json({ error: 'Incorrect password' });
+
+  db.prepare('UPDATE admin_users SET totp_secret = NULL, totp_enabled = 0 WHERE id = ?').run(user.id);
+  res.json({ message: 'TOTP disabled' });
+});
+
+// GET /api/auth/totp-status
+router.get('/totp-status', requireAuth, (req, res) => {
+  const db = getDb();
+  const user = db.prepare('SELECT totp_enabled FROM admin_users WHERE id = ?').get(req.admin.id);
+  res.json({ enabled: user?.totp_enabled === 1 });
 });
 
 // POST /api/auth/change-password

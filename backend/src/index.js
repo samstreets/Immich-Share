@@ -12,20 +12,19 @@ const adminRoutes = require('./routes/admin');
 const publicRoutes = require('./routes/public');
 const proxyRoutes = require('./routes/proxy');
 const { startWatcher } = require('./watcher');
+const { startCleanup } = require('./cleanup');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Trust proxy (needed behind Docker/nginx)
 app.set('trust proxy', 1);
 
-// Security middleware
 app.use(helmet({
   contentSecurityPolicy: false,
   crossOriginEmbedderPolicy: false,
 }));
 
-// Dynamic CORS -- reads allowed_origins from DB at request time
+// Dynamic CORS
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin) return callback(null, true);
@@ -50,10 +49,7 @@ const limiter = rateLimit({
   max: 1000,
   standardHeaders: true,
   legacyHeaders: false,
-  skip: (req) => {
-    const p = req.path;
-    return p.includes('/upload');
-  },
+  skip: (req) => req.path.includes('/upload'),
   handler: (req, res) =>
     res.status(429).json({ error: 'Too many requests, please try again later.' }),
 });
@@ -69,12 +65,14 @@ const authLimiter = rateLimit({
 app.use('/api/', limiter);
 app.use('/api/auth/', authLimiter);
 app.use('/api/public/verify', authLimiter);
+app.use('/api/public/token-access', authLimiter);
 
 const jsonParser = express.json({ limit: '10mb' });
 app.use('/api/auth',                   jsonParser);
 app.use('/api/shares',                 jsonParser);
 app.use('/api/admin',                  jsonParser);
 app.use('/api/public/verify',          jsonParser);
+app.use('/api/public/token-access',    jsonParser);
 app.use('/api/public/info',            jsonParser);
 app.use('/api/public/content',         jsonParser);
 app.use('/api/public/upload-assemble', jsonParser);
@@ -82,8 +80,9 @@ app.use('/api/public/upload-assemble', jsonParser);
 // Init database
 initDb();
 
-// Start album watcher (auto-tags new assets in watched album shares)
+// Start background jobs
 startWatcher();
+startCleanup();
 
 // API Routes
 app.use('/api/auth', authRoutes);

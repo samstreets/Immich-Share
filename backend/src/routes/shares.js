@@ -1,19 +1,15 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
+const crypto = require('crypto');
 const { getDb } = require('../db');
 const { requireAuth } = require('../middleware/auth');
 const { generateQR, matrixToSVG } = require('../qr');
 
 const router = express.Router();
 
-// All share routes require admin auth
 router.use(requireAuth);
 
-// ── C1 FIX: UUID validation helper ──────────────────────────────────────────
-// All bulk endpoints accept caller-supplied ID arrays. Validate every element
-// before interpolating into SQL to prevent injection via malformed values and
-// to avoid leaking schema detail in DB error messages.
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function validateUuids(ids) {
@@ -33,9 +29,6 @@ function getExternalUrl(db) {
   return (row?.value || '').replace(/\/$/, '');
 }
 
-/**
- * Validate a custom slug: lowercase alphanumeric + hyphens, 3-60 chars.
- */
 function cleanSlug(raw) {
   const s = raw.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
   if (s.length < 3) throw new Error('Slug must be at least 3 characters');
@@ -51,18 +44,24 @@ function shareUrl(externalUrl, share) {
   return `${externalUrl}/s/${share.id}`;
 }
 
-/**
- * Validate tag IDs: comma-separated UUIDs (or empty).
- * Returns normalized string or null.
- */
+function passwordlessUrl(externalUrl, share) {
+  if (!share.access_token) return null;
+  if (share.slug) return `${externalUrl}/s/${share.slug}?k=${share.access_token}`;
+  return `${externalUrl}/s/${share.id}?k=${share.access_token}`;
+}
+
 function cleanTagIds(raw) {
   if (!raw || !raw.trim()) return null;
   const ids = raw.split(',').map(s => s.trim()).filter(Boolean);
-  // Validate each tag ID is a proper UUID
   for (const id of ids) {
     if (!UUID_RE.test(id)) throw new Error(`Invalid tag ID format: "${id}"`);
   }
   return ids.length > 0 ? ids.join(',') : null;
+}
+
+function generateAccessToken() {
+  // 32 bytes → 64 hex chars — long enough to be unguessable
+  return crypto.randomBytes(32).toString('hex');
 }
 
 // List all shares
@@ -94,6 +93,7 @@ router.get('/', (req, res) => {
     SELECT id, slug, name, description, share_type, immich_album_id, immich_tag_id,
            expires_at, allow_download, allow_upload, show_metadata,
            upload_tag_ids, watch_tag_ids,
+           access_token, max_views, webhook_url, notify_email,
            view_count, created_at, updated_at, is_active
     FROM shares ${where} ORDER BY created_at DESC
   `).all(...params);
@@ -103,6 +103,7 @@ router.get('/', (req, res) => {
   const sharesWithLinks = shares.map(s => ({
     ...s,
     shareUrl: shareUrl(externalUrl, s),
+    passwordlessUrl: passwordlessUrl(externalUrl, s),
     isExpired: s.expires_at ? new Date(s.expires_at) < new Date() : false,
   }));
 
@@ -112,7 +113,6 @@ router.get('/', (req, res) => {
 // Get single share
 router.get('/:id', (req, res) => {
   const db = getDb();
-  // Validate the path param too — it comes from the URL but let's be consistent
   if (!UUID_RE.test(req.params.id)) {
     return res.status(400).json({ error: 'Invalid share id' });
   }
@@ -124,11 +124,12 @@ router.get('/:id', (req, res) => {
   res.json({
     ...share,
     shareUrl: shareUrl(externalUrl, share),
+    passwordlessUrl: passwordlessUrl(externalUrl, share),
     password_hash: undefined,
   });
 });
 
-// ── QR Code for share ─────────────────────────────────────────────────────────
+// QR Code for share
 router.get('/:id/qr', (req, res) => {
   if (!UUID_RE.test(req.params.id)) {
     return res.status(400).json({ error: 'Invalid share id' });
@@ -155,7 +156,7 @@ router.get('/:id/qr', (req, res) => {
   }
 });
 
-// ── Per-share activity stats ──────────────────────────────────────────────────
+// Per-share activity stats
 router.get('/:id/stats', (req, res) => {
   if (!UUID_RE.test(req.params.id)) {
     return res.status(400).json({ error: 'Invalid share id' });
@@ -184,9 +185,7 @@ router.get('/:id/stats', (req, res) => {
   res.json({ byDay, byAction, total, unique });
 });
 
-// ── Bulk operations ───────────────────────────────────────────────────────────
-
-// C1 FIX: validate every ID as a UUID before building the IN clause.
+// Bulk operations
 router.post('/bulk/delete', (req, res) => {
   const { ids } = req.body;
   const check = validateUuids(ids);
@@ -211,6 +210,36 @@ router.post('/bulk/toggle', (req, res) => {
   res.json({ updated: result.changes });
 });
 
+// POST /shares/:id/access-token  — generate or regenerate passwordless token
+router.post('/:id/access-token', (req, res) => {
+  if (!UUID_RE.test(req.params.id)) {
+    return res.status(400).json({ error: 'Invalid share id' });
+  }
+  const db = getDb();
+  const share = db.prepare('SELECT id FROM shares WHERE id = ?').get(req.params.id);
+  if (!share) return res.status(404).json({ error: 'Share not found' });
+
+  const token = generateAccessToken();
+  db.prepare('UPDATE shares SET access_token = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(token, req.params.id);
+
+  const externalUrl = getExternalUrl(db);
+  const updated = db.prepare('SELECT * FROM shares WHERE id = ?').get(req.params.id);
+  res.json({ access_token: token, passwordlessUrl: passwordlessUrl(externalUrl, updated) });
+});
+
+// DELETE /shares/:id/access-token  — revoke passwordless token
+router.delete('/:id/access-token', (req, res) => {
+  if (!UUID_RE.test(req.params.id)) {
+    return res.status(400).json({ error: 'Invalid share id' });
+  }
+  const db = getDb();
+  const result = db.prepare(
+    'UPDATE shares SET access_token = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
+  ).run(req.params.id);
+  if (result.changes === 0) return res.status(404).json({ error: 'Share not found' });
+  res.json({ message: 'Passwordless access token revoked' });
+});
+
 // Create share
 router.post('/', async (req, res) => {
   const {
@@ -227,6 +256,9 @@ router.post('/', async (req, res) => {
     upload_tag_ids: rawUploadTagIds,
     watch_tag_ids: rawWatchTagIds,
     slug: rawSlug,
+    max_views,
+    webhook_url,
+    notify_email,
   } = req.body;
 
   if (!name || !password) {
@@ -241,7 +273,6 @@ router.post('/', async (req, res) => {
   if (share_type === 'tag' && !immich_tag_id) {
     return res.status(400).json({ error: 'immich_tag_id required for tag shares' });
   }
-  // Validate album/tag IDs are proper UUIDs
   if (immich_album_id && !UUID_RE.test(immich_album_id)) {
     return res.status(400).json({ error: 'Invalid immich_album_id format' });
   }
@@ -269,16 +300,23 @@ router.post('/', async (req, res) => {
     return res.status(400).json({ error: err.message });
   }
 
+  // Validate max_views
+  const maxViews = max_views ? parseInt(max_views, 10) : null;
+  if (maxViews !== null && (isNaN(maxViews) || maxViews < 1)) {
+    return res.status(400).json({ error: 'max_views must be a positive integer' });
+  }
+
   const id = uuidv4();
   const passwordHash = await bcrypt.hash(password, 10);
   const db = getDb();
 
   try {
     db.prepare(`
-      INSERT INTO shares (id, slug, name, description, share_type, immich_album_id, immich_tag_id,
+      INSERT INTO shares (
+        id, slug, name, description, share_type, immich_album_id, immich_tag_id,
         password_hash, expires_at, allow_download, allow_upload, show_metadata,
-        upload_tag_ids, watch_tag_ids)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        upload_tag_ids, watch_tag_ids, max_views, webhook_url, notify_email
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id, slug, name, description || null, share_type,
       immich_album_id || null,
@@ -289,7 +327,10 @@ router.post('/', async (req, res) => {
       allow_upload ? 1 : 0,
       show_metadata ? 1 : 0,
       uploadTagIds,
-      watchTagIds
+      watchTagIds,
+      maxViews,
+      webhook_url || null,
+      notify_email || null,
     );
   } catch (err) {
     if (err.message.includes('UNIQUE constraint failed: shares.slug')) {
@@ -299,8 +340,8 @@ router.post('/', async (req, res) => {
   }
 
   const externalUrl = getExternalUrl(db);
-  const newShare = { id, slug };
-  res.status(201).json({ id, slug, shareUrl: shareUrl(externalUrl, newShare) });
+  const newShare = { id, slug, access_token: null };
+  res.status(201).json({ id, slug, shareUrl: shareUrl(externalUrl, newShare), passwordlessUrl: null });
 });
 
 // Update share
@@ -318,6 +359,9 @@ router.patch('/:id', async (req, res) => {
     upload_tag_ids: rawUploadTagIds,
     watch_tag_ids: rawWatchTagIds,
     slug: rawSlug,
+    max_views,
+    webhook_url,
+    notify_email,
   } = req.body;
 
   let passwordHash = share.password_hash;
@@ -340,6 +384,14 @@ router.patch('/:id', async (req, res) => {
     }
   }
 
+  const maxViews = max_views !== undefined
+    ? (max_views === null || max_views === '' ? null : parseInt(max_views, 10))
+    : share.max_views;
+
+  if (maxViews !== null && maxViews !== undefined && (isNaN(maxViews) || maxViews < 1)) {
+    return res.status(400).json({ error: 'max_views must be a positive integer or empty' });
+  }
+
   const updatedName        = name !== undefined ? name : share.name;
   const updatedDescription = description !== undefined ? description : share.description;
   const updatedExpiresAt   = expires_at !== undefined ? (expires_at || null) : share.expires_at;
@@ -347,6 +399,8 @@ router.patch('/:id', async (req, res) => {
   const updatedUpload      = allow_upload !== undefined ? (allow_upload ? 1 : 0) : share.allow_upload;
   const updatedMetadata    = show_metadata !== undefined ? (show_metadata ? 1 : 0) : share.show_metadata;
   const updatedActive      = is_active !== undefined ? (is_active ? 1 : 0) : share.is_active;
+  const updatedWebhook     = webhook_url !== undefined ? (webhook_url || null) : share.webhook_url;
+  const updatedEmail       = notify_email !== undefined ? (notify_email || null) : share.notify_email;
 
   let updatedUploadTagIds, updatedWatchTagIds;
   try {
@@ -374,12 +428,16 @@ router.patch('/:id', async (req, res) => {
         upload_tag_ids = ?,
         watch_tag_ids = ?,
         is_active = ?,
+        max_views = ?,
+        webhook_url = ?,
+        notify_email = ?,
         updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).run(
       slug, updatedName, updatedDescription, passwordHash,
       updatedExpiresAt, updatedDownload, updatedUpload, updatedMetadata,
       updatedUploadTagIds, updatedWatchTagIds, updatedActive,
+      maxViews, updatedWebhook, updatedEmail,
       req.params.id
     );
   } catch (err) {
