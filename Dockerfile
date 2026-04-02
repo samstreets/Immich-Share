@@ -49,8 +49,9 @@ ENV NODE_ENV=production
 ENV PORT=3000
 ENV DB_PATH=/app/data/app.db
 
+# Fixed: /api/public/info/healthcheck returns {"status":"ok"} — check for that directly
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
-  CMD wget -qO- http://localhost:3000/api/public/info/healthcheck 2>/dev/null | grep -q "error" || wget -qO- http://localhost:3000/ > /dev/null 2>&1
+  CMD wget -qO- http://localhost:3000/api/public/info/healthcheck | grep -q '"status":"ok"' || exit 1
 
 ENTRYPOINT ["dumb-init", "--"]
 CMD ["node", "backend/src/index.js"]

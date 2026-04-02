@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react'
-import { useApi } from '../hooks/useAuth.jsx'
+import { useApi, useAuth } from '../hooks/useAuth.jsx'
 
 // ── Shared UI primitives ──────────────────────────────────────────────────────
 
@@ -115,29 +115,49 @@ function UrlListEditor({ value, onChange }) {
 }
 
 // ── TOTP setup panel ──────────────────────────────────────────────────────────
+// Uses raw fetch (not useApi) so a 401 shows an error message instead of
+// silently logging the user out mid-flow.
 function TotpPanel() {
-  const api = useApi()
-  const [status, setStatus] = useState(null) // null | loading | { enabled }
-  const [enrollData, setEnrollData] = useState(null) // { secret, qrDataUrl }
+  const { token } = useAuth()
+  const [status, setStatus] = useState(null)
+  const [enrollData, setEnrollData] = useState(null)
   const [confirmCode, setConfirmCode] = useState('')
   const [disablePassword, setDisablePassword] = useState('')
   const [msg, setMsg] = useState(null)
   const [loading, setLoading] = useState(false)
   const [showDisable, setShowDisable] = useState(false)
 
+  // Raw fetch that never triggers global logout
+  async function totpFetch(path, options = {}) {
+    const res = await fetch(`/api${path}`, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+        ...(options.headers || {}),
+      },
+      body: options.body ? JSON.stringify(options.body) : undefined,
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`)
+    return data
+  }
+
   const loadStatus = useCallback(async () => {
     try {
-      const d = await api('/auth/totp-status')
+      const d = await totpFetch('/auth/totp-status')
       setStatus(d)
-    } catch {}
-  }, [api])
+    } catch (err) {
+      setMsg({ type: 'error', text: `Could not load 2FA status: ${err.message}` })
+    }
+  }, [token])
 
-  useEffect(() => { loadStatus() }, [])
+  useEffect(() => { loadStatus() }, [loadStatus])
 
   async function startEnroll() {
     setLoading(true); setMsg(null); setEnrollData(null)
     try {
-      const d = await api('/auth/totp-enroll', { method: 'POST' })
+      const d = await totpFetch('/auth/totp-enroll', { method: 'POST' })
       setEnrollData(d)
     } catch (err) {
       setMsg({ type: 'error', text: err.message })
@@ -148,7 +168,7 @@ function TotpPanel() {
     e.preventDefault()
     setLoading(true); setMsg(null)
     try {
-      await api('/auth/totp-confirm', { method: 'POST', body: { code: confirmCode } })
+      await totpFetch('/auth/totp-confirm', { method: 'POST', body: { code: confirmCode } })
       setMsg({ type: 'success', text: '✅ Two-factor authentication enabled! You will need your authenticator app on next login.' })
       setEnrollData(null); setConfirmCode('')
       loadStatus()
@@ -161,7 +181,7 @@ function TotpPanel() {
     e.preventDefault()
     setLoading(true); setMsg(null)
     try {
-      await api('/auth/totp-disable', { method: 'POST', body: { password: disablePassword } })
+      await totpFetch('/auth/totp-disable', { method: 'POST', body: { password: disablePassword } })
       setMsg({ type: 'success', text: 'Two-factor authentication disabled.' })
       setShowDisable(false); setDisablePassword('')
       loadStatus()
@@ -170,7 +190,7 @@ function TotpPanel() {
     } finally { setLoading(false) }
   }
 
-  if (status === null) {
+  if (status === null && !msg) {
     return <div style={{ display: 'flex', gap: 8, alignItems: 'center', color: 'var(--text-dim)', fontSize: '0.82rem' }}><span className="loading-spinner" style={{ width: 14, height: 14 }} /> Loading…</div>
   }
 
@@ -178,17 +198,19 @@ function TotpPanel() {
     <div>
       <Msg msg={msg} />
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14, padding: '10px 12px', background: 'var(--bg3)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
-        <StatusPill ok={status.enabled} label={status.enabled ? '2FA Enabled' : '2FA Disabled'} />
-        <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)', flex: 1 }}>
-          {status.enabled
-            ? 'Your account is protected with TOTP authentication.'
-            : 'Add an extra layer of security to your admin account.'}
-        </span>
-      </div>
+      {status && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14, padding: '10px 12px', background: 'var(--bg3)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
+          <StatusPill ok={status.enabled} label={status.enabled ? '2FA Enabled' : '2FA Disabled'} />
+          <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)', flex: 1 }}>
+            {status.enabled
+              ? 'Your account is protected with TOTP authentication.'
+              : 'Add an extra layer of security to your admin account.'}
+          </span>
+        </div>
+      )}
 
       {/* Not enrolled */}
-      {!status.enabled && !enrollData && (
+      {status && !status.enabled && !enrollData && (
         <button className="btn btn-primary btn-sm" onClick={startEnroll} disabled={loading}>
           {loading ? <span className="loading-spinner" style={{ width: 12, height: 12 }} /> : '🔐 Set up authenticator app'}
         </button>
@@ -236,7 +258,7 @@ function TotpPanel() {
       )}
 
       {/* Disable */}
-      {status.enabled && (
+      {status && status.enabled && (
         <div>
           {!showDisable ? (
             <button className="btn btn-danger btn-sm" onClick={() => setShowDisable(true)}>
@@ -489,7 +511,6 @@ export default function SettingsPage() {
     if (!testEmailTo) return
     setEmailTesting(true); setSmtpMsg(null)
     try {
-      // Save first so the test uses current values
       await api('/admin/settings', { method: 'PUT', body: smtp })
       const res = await api('/admin/notifications/test-email', { method: 'POST', body: { to: testEmailTo } })
       setSmtpMsg({ type: 'success', text: res.message })
