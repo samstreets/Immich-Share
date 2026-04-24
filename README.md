@@ -5,13 +5,23 @@ A self-hosted web app that sits alongside your [Immich](https://immich.app) inst
 ## Features
 
 - 🔒 **Password-protected shares** — each share has its own password
-- 📁 **Album or asset shares** — share a whole Immich album or hand-pick assets
+- 🔑 **Passwordless access** — generate a token-in-URL link (no password prompt)
+- 📁 **Album or tag shares** — share a whole Immich album or assets by tag
 - ⏱ **Expiry dates** — shares can auto-expire
-- ⬇ **Optional downloads** — control whether viewers can download originals
-- ⬆ **Optional uploads** — let viewers contribute photos back to the album
-- 🔗 **Custom external URL** — set the public URL used in share links
-- 🖼 **Lightbox viewer** — full-screen photo/video viewer with keyboard navigation
-- 📊 **Admin dashboard** — view stats, manage shares, test Immich connection
+- 👁 **Max view limits** — auto-disable a share after N views
+- ⬇ **Optional downloads** — control whether viewers can download originals or a ZIP
+- ⬆ **Optional uploads** — let viewers contribute photos back to the album (chunked, no file-size limit)
+- 🏷 **Auto-tag uploads** — automatically apply Immich tags to every uploaded asset
+- 👀 **Album watcher** — periodically tags new assets added to watched albums
+- 🔗 **Custom slugs** — friendly URLs like `/s/summer-2024`
+- 🌐 **External URL config** — set the public URL used in share links
+- 🖼 **Lightbox viewer** — full-screen photo/video viewer with pinch-to-zoom, drag-to-pan, and keyboard navigation
+- ✅ **Drag-to-select** — select multiple photos in the gallery and bulk-download as ZIP
+- 📊 **Admin dashboard** — stats, per-share activity charts, access logs with export (CSV/JSON)
+- 🔔 **Notifications** — email (SMTP) and webhook alerts on upload, per-share or global
+- 🔐 **Two-factor authentication** — TOTP (Google Authenticator, Authy, etc.) for the admin login
+- 🧹 **Scheduled cleanup** — auto-purge expired shares and orphaned upload chunks
+- 📱 **Mobile-friendly admin** — responsive sidebar + bottom nav for phones
 - 🐳 **Single Docker container** — easy to self-host
 
 ---
@@ -25,7 +35,7 @@ cd immich-share
 
 # 2. Create your .env file
 cp .env.example .env
-# Edit .env — set IMMICH_URL, IMMICH_API_KEY, EXTERNAL_URL, JWT_SECRET
+# Edit .env — set JWT_SECRET at minimum
 
 # 3. Start
 docker compose up -d
@@ -38,16 +48,29 @@ docker compose up -d
 
 ## Configuration
 
-All settings can be configured via environment variables **or** the admin UI (Settings page).
+Settings can be configured via **environment variables** (seed on first boot) **or** the **admin UI → Settings** page at any time.
 
 | Variable | Required | Description |
 |---|---|---|
-| `IMMICH_URL` | Yes | URL of your Immich instance, e.g. `http://192.168.1.100:2283` |
-| `IMMICH_API_KEY` | Yes | API key from Immich → Account Settings → API Keys |
-| `EXTERNAL_URL` | Yes | Public URL of this app — used in share links |
-| `JWT_SECRET` | Yes | Long random string for signing admin tokens |
+| `JWT_SECRET` | **Yes** | Long random string for signing admin tokens. Min 32 chars. |
+| `IMMICH_URL` | No* | URL of your Immich instance, e.g. `http://192.168.1.100:2283` |
+| `IMMICH_API_KEY` | No* | API key from Immich → Account Settings → API Keys |
+| `EXTERNAL_URL` | No* | Public URL of this app — used in share links |
 | `ADMIN_PASSWORD` | No | Default admin password (first run only, default: `admin`) |
 | `PORT` | No | Port to listen on (default: `3000`) |
+| `DB_PATH` | No | Path to SQLite database (default: `/app/data/app.db`) |
+| `ALLOWED_ORIGINS` | No | Newline-separated list of allowed CORS origins (empty = allow all) |
+| `SMTP_HOST` | No | SMTP server hostname for email notifications |
+| `SMTP_PORT` | No | SMTP port (default: `587`) |
+| `SMTP_USER` | No | SMTP username |
+| `SMTP_PASS` | No | SMTP password |
+| `SMTP_FROM` | No | From address for notification emails |
+| `GLOBAL_WEBHOOK_URL` | No | Webhook URL fired on every upload across all shares |
+| `GLOBAL_WEBHOOK_SECRET` | No | HMAC-SHA256 signing secret for the global webhook |
+| `CLEANUP_INTERVAL_MS` | No | How often the cleanup job runs (default: 30 minutes) |
+| `WATCH_INTERVAL_MS` | No | How often the album watcher runs (default: 5 minutes) |
+
+*These can be set via the Settings UI after first boot.
 
 ---
 
@@ -60,10 +83,6 @@ All settings can be configured via environment variables **or** the admin UI (Se
 
 ### Required API Key Permissions
 
-Immich API keys are scoped per-user. The key you provide needs the following permissions — these map directly to what Immich Share calls on your behalf:
-
-#### Minimum permissions for read-only shares
-
 | Permission | Why it's needed |
 |---|---|
 | `album.read` | List and browse albums in the share creation UI |
@@ -73,28 +92,13 @@ Immich API keys are scoped per-user. The key you provide needs the following per
 | `asset.view` | Serve thumbnails and preview images to share viewers |
 | `asset.download` | Proxy original file downloads to share viewers |
 | `tag.read` | List tags so you can create tag-based shares |
+| `asset.upload` | *(upload-enabled shares)* Let viewers upload photos into Immich |
+| `tag.asset` | *(upload tags / album watcher)* Apply tags to assets automatically |
 
-#### Additional permissions for upload-enabled shares
-
-| Permission | Why it's needed |
-|---|---|
-| `asset.upload` | Let viewers upload photos back into Immich |
-| `tag.asset` | Apply auto-tags to assets uploaded through a share |
-
-#### Additional permissions for the auto-tag watcher
-
-| Permission | Why it's needed |
-|---|---|
-| `tag.asset` | Apply watch tags to newly added album assets |
-
-> **Note:** If you are using an **admin** Immich account to generate the key, all permissions are granted by default and no scoping is required. Scoped permissions apply when generating a key from a non-admin account or when using Immich's fine-grained API key scopes (available in Immich v1.100+).
-
-### Full permission reference
-
-Below is the complete list of Immich API key permissions. Only the ones listed in the tables above are required by Immich Share — everything else can be left disabled.
+> **Note:** An admin Immich account key has all permissions by default. Scoped permissions apply when using Immich v1.100+ fine-grained API keys.
 
 <details>
-<summary>Click to expand full permission list</summary>
+<summary>Full Immich permission reference</summary>
 
 | Scope | Permissions |
 |---|---|
@@ -125,7 +129,7 @@ Below is the complete list of Immich API key permissions. Only the ones listed i
 | `plugin` | `plugin.create` `plugin.read` `plugin.update` `plugin.delete` |
 | `server` | `server.about` `server.apkLinks` `server.storage` `server.statistics` `server.versionCheck` |
 | `serverLicense` | `serverLicense.read` `serverLicense.update` `serverLicense.delete` |
-| `session` | `session.create` `session.read` `session.update` `session.delete` `session.lock` |
+| `session` | `session.create` `session.read` `session.update` `session.lock` |
 | `sharedLink` | `sharedLink.create` `sharedLink.read` `sharedLink.update` `sharedLink.delete` |
 | `stack` | `stack.create` `stack.read` `stack.update` `stack.delete` |
 | `sync` | `sync.stream` |
@@ -149,6 +153,28 @@ Below is the complete list of Immich API key permissions. Only the ones listed i
 
 ---
 
+## Share Features
+
+### Passwordless Access
+Generate a static token-in-URL link for a share — visitors open the link and go straight to the gallery without a password prompt. Tokens can be generated or revoked at any time from the Shares admin page.
+
+### Custom Slugs
+Instead of `/s/<uuid>`, give a share a memorable URL like `/s/wedding-photos`. Slugs must be 3–60 lowercase alphanumeric characters or hyphens and must be unique.
+
+### Max Views
+Set a view limit on a share — it is automatically disabled once the limit is reached (checked every 30 minutes by the cleanup job).
+
+### Upload Tags
+When uploads are enabled, select one or more Immich tags to be automatically applied to every photo uploaded through that share.
+
+### Album Watcher
+For album shares, configure "watch tags" — the watcher runs every 5 minutes and applies those tags to any assets that have been newly added to the album since the last check.
+
+### Notifications
+Configure SMTP settings globally and set a per-share **notify email** to receive an alert whenever someone uploads a file. Webhooks (global or per-share) fire a signed JSON payload on each upload and can be used to trigger automations.
+
+---
+
 ## Reverse Proxy (nginx example)
 
 ```nginx
@@ -162,14 +188,17 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        # Needed for large photo downloads
+        # Required for large uploads and downloads
         proxy_buffering off;
         proxy_read_timeout 300s;
+        client_max_body_size 0;
     }
 }
 ```
 
 ---
+
+## Local Development
 
 ### Prerequisites
 - Node.js 20+
@@ -178,17 +207,22 @@ server {
 ### Run locally
 
 ```bash
+# Quickstart script (copies .env.example if no .env exists)
+./dev.sh
+
+# Or manually:
+
 # Backend
 cd backend
+cp ../.env.example .env  # edit it — set JWT_SECRET at minimum
 npm install
-cp ../.env.example .env  # edit it
 node src/index.js
 
 # Frontend (separate terminal)
 cd frontend
 npm install
 npm run dev
-# → http://localhost:5173 (proxies API to :3000)
+# → http://localhost:5173 (proxies /api to :3000)
 ```
 
 ### Build Docker image locally
@@ -196,10 +230,10 @@ npm run dev
 ```bash
 docker build -t immich-share .
 docker run -p 3000:3000 \
+  -e JWT_SECRET=change-me-to-something-long \
   -e IMMICH_URL=http://your-immich:2283 \
   -e IMMICH_API_KEY=your-key \
   -e EXTERNAL_URL=http://localhost:3000 \
-  -e JWT_SECRET=changeme \
   -v immich-share-data:/app/data \
   immich-share
 ```
@@ -210,9 +244,11 @@ docker run -p 3000:3000 \
 
 - All share metadata is stored in a local **SQLite** database at `/app/data/app.db`
 - No photo data is stored — all media is proxied directly from your Immich instance
-- Share passwords are **bcrypt-hashed** (cost factor 10–12)
+- Share passwords are **bcrypt-hashed** (cost factor 10)
 - Admin passwords are bcrypt-hashed (cost factor 12)
-- Rate limiting is applied to auth and share-verify endpoints
+- Share session tokens are HMAC-SHA256 signed, valid for 8 hours
+- Webhook payloads are optionally HMAC-SHA256 signed (`X-ImmichShare-Signature: sha256=…`)
+- Rate limiting is applied to auth, share-verify, and token-access endpoints
 
 ---
 
