@@ -1,7 +1,7 @@
 const express = require('express');
 const { getDb } = require('../db');
 const { requireAuth } = require('../middleware/auth');
-const { getAlbums, getAlbum, getTags, testConnection, createAlbum, createTag, tagAssets } = require('../immich');
+const { getAlbums, getAlbum, getAlbumAssets, getTags, testConnection, createAlbum, createTag, tagAssets } = require('../immich');
 const { sendEmail, fireWebhook } = require('../notifications');
 
 const router = express.Router();
@@ -122,10 +122,16 @@ router.post('/immich/albums', async (req, res) => {
 });
 
 // Get Immich album details
+// Immich v3 removed the `assets` property from the album response, so we
+// fetch it separately via search/metadata and merge it back in for the
+// frontend, which still expects album.assets.
 router.get('/immich/albums/:id', async (req, res) => {
   try {
-    const album = await getAlbum(req.params.id);
-    res.json(album);
+    const [album, assets] = await Promise.all([
+      getAlbum(req.params.id),
+      getAlbumAssets(req.params.id),
+    ]);
+    res.json({ ...album, assets });
   } catch (err) {
     res.status(502).json({ error: err.message });
   }
