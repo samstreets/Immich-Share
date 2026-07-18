@@ -10,7 +10,7 @@
 'use strict';
 
 const { getDb } = require('./db');
-const { getAlbum, tagAssets } = require('./immich');
+const { getAlbumAssets, tagAssets } = require('./immich');
 
 const INTERVAL_MS = parseInt(process.env.WATCH_INTERVAL_MS || String(5 * 60 * 1000), 10);
 
@@ -38,8 +38,7 @@ async function runWatcher() {
       if (tagIds.length === 0) continue;
 
       // Fetch current album assets from Immich
-      const album = await getAlbum(share.immich_album_id);
-      const currentAssets = album.assets || [];
+      const currentAssets = await getAlbumAssets(share.immich_album_id);
       const currentIds = new Set(currentAssets.map(a => a.id));
 
       // Load previously seen IDs
