@@ -4,7 +4,7 @@ const os = require('os');
 const fs = require('fs');
 const pathLib = require('path');
 const { getDb } = require('../db');
-const { getAlbum, getAssetsByTag, proxyAssetOriginal, tagAssets } = require('../immich');
+const { getAlbumAssets, getAssetsByTag, proxyAssetOriginal, tagAssets } = require('../immich');
 const { makeToken, verifyToken } = require('../shareSession');
 const { notifyUpload } = require('../notifications');
 
@@ -159,8 +159,7 @@ router.post('/content/:id', async (req, res) => {
   try {
     let assets = [];
     if (share.share_type === 'album') {
-      const album = await getAlbum(share.immich_album_id);
-      assets = album.assets || [];
+      assets = await getAlbumAssets(share.immich_album_id);
     } else if (share.share_type === 'tag') {
       assets = await getAssetsByTag(share.immich_tag_id);
     }
@@ -200,8 +199,7 @@ router.get('/zip/:id', async (req, res) => {
   try {
     let assets = [];
     if (share.share_type === 'album') {
-      const album = await getAlbum(share.immich_album_id);
-      assets = album.assets || [];
+      assets = await getAlbumAssets(share.immich_album_id);
     } else if (share.share_type === 'tag') {
       assets = await getAssetsByTag(share.immich_tag_id);
     }
@@ -509,7 +507,7 @@ router.post('/upload-assemble/:id', async (req, res) => {
   if (!verifyToken(share.id, sessionToken)) return res.status(401).json({ error: 'Invalid or expired session.' });
   if (!share.allow_upload) return res.status(403).json({ error: 'Uploads not allowed' });
 
-  const { uploadId, filename, deviceAssetId, fileCreatedAt, fileModifiedAt } = req.body;
+  const { uploadId, filename, fileCreatedAt, fileModifiedAt } = req.body;
   if (!uploadId || !filename) return res.status(400).json({ error: 'Missing uploadId or filename' });
 
   if (!UUID_RE.test(uploadId)) {
@@ -575,10 +573,10 @@ router.post('/upload-assemble/:id', async (req, res) => {
       Buffer.from('\r\n'),
     ]);
 
+    // Immich v3 removed the deviceId/deviceAssetId properties from
+    // AssetMediaCreateDto (POST /assets) — no longer sent here.
     const bodyBuffer = Buffer.concat([
       buildFile('assetData', filename, mimeType, fileData),
-      buildField('deviceAssetId', deviceAssetId || `${filename}-${Date.now()}`),
-      buildField('deviceId', 'immich-share-chunked-upload'),
       buildField('fileCreatedAt', fileCreatedAt || new Date().toISOString()),
       buildField('fileModifiedAt', fileModifiedAt || new Date().toISOString()),
       Buffer.from(`--${boundary}--\r\n`),
