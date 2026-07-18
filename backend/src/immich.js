@@ -42,6 +42,27 @@ async function getAlbum(albumId) {
   return immichRequest(`/albums/${albumId}`);
 }
 
+// Immich v3 removed the `assets` property from AlbumResponseDto (GET /albums/:id).
+// Fetch an album's assets via POST /search/metadata with an albumIds filter instead,
+// paginating through all pages since results are capped per page.
+async function getAlbumAssets(albumId) {
+  const items = [];
+  let page = 1;
+  // Safety cap so a misbehaving server can't loop forever.
+  for (let i = 0; i < 1000; i++) {
+    const result = await immichRequest('/search/metadata', {
+      method: 'POST',
+      body: JSON.stringify({ albumIds: [albumId], size: 1000, page }),
+    });
+    const batch = result?.assets?.items || [];
+    items.push(...batch);
+    const nextPage = result?.assets?.nextPage;
+    if (!nextPage || batch.length === 0) break;
+    page = typeof nextPage === 'number' ? nextPage : page + 1;
+  }
+  return items;
+}
+
 async function createAlbum(albumName, description = '') {
   return immichRequest('/albums', {
     method: 'POST',
@@ -136,6 +157,7 @@ async function testConnection() {
 module.exports = {
   getAlbums,
   getAlbum,
+  getAlbumAssets,
   createAlbum,
   getTags,
   createTag,
