@@ -43,6 +43,13 @@ function getActiveShare(id) {
   return share;
 }
 
+// Healthcheck (no auth) — must be registered before the /info/:id wildcard
+// below, otherwise Express matches "healthcheck" as a share id and this
+// handler is never reached.
+router.get('/info/healthcheck', (req, res) => {
+  res.json({ status: 'ok' });
+});
+
 // Public share info (no auth)
 router.get('/info/:id', (req, res) => {
   const db = getDb();
@@ -62,11 +69,6 @@ router.get('/info/:id', (req, res) => {
     isActive: share.is_active === 1,
     appName: appNameRow?.value || 'Immich Share',
   });
-});
-
-// Healthcheck (no auth)
-router.get('/info/healthcheck', (req, res) => {
-  res.json({ status: 'ok' });
 });
 
 // ── Passwordless access via token-in-URL ──────────────────────────────────────
