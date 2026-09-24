@@ -31,7 +31,7 @@ services:
       # EXTERNAL_URL: https://share.yourdomain.com
 
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/auth/me"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/public/info/healthcheck"]
       interval: 30s
       timeout: 10s
       retries: 3

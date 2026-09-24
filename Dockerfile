@@ -49,9 +49,11 @@ ENV NODE_ENV=production
 ENV PORT=3000
 ENV DB_PATH=/app/data/app.db
 
-# Fixed: /api/public/info/healthcheck returns {"status":"ok"} — check for that directly
+# /api/public/info/healthcheck returns {"status":"ok"} — check for that directly.
+# Use 127.0.0.1 rather than localhost: musl's resolver can return ::1 first,
+# and Node only binds the IPv4 wildcard, so "localhost" spuriously refuses.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
-  CMD wget -qO- http://localhost:3000/api/public/info/healthcheck | grep -q '"status":"ok"' || exit 1
+  CMD wget -qO- http://127.0.0.1:3000/api/public/info/healthcheck | grep -q '"status":"ok"' || exit 1
 
 ENTRYPOINT ["dumb-init", "--"]
 CMD ["node", "backend/src/index.js"]
