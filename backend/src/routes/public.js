@@ -365,6 +365,11 @@ router.post('/upload/:id', async (req, res) => {
 
   if (!share.allow_upload) return res.status(403).json({ error: 'Uploads not allowed for this share' });
 
+  const declared = parseInt(req.headers['content-length'] || '', 10);
+  if (!declared || declared > MAX_UPLOAD_BYTES) {
+    return res.status(413).json({ error: 'Upload too large or missing Content-Length' });
+  }
+
   const fetch = require('node-fetch');
   const settingsDb = getDb();
   const urlRow = settingsDb.prepare("SELECT value FROM settings WHERE key = 'immich_url'").get();
@@ -437,8 +442,20 @@ router.post('/upload-chunk/:id', async (req, res) => {
   const boundaryMatch = contentType.match(/boundary=([^\s;]+)/);
   if (!boundaryMatch) return res.status(400).json({ error: 'Missing multipart boundary' });
 
+  const declaredLen = parseInt(req.headers['content-length'] || '', 10);
+  if (!declaredLen || declaredLen > CHUNK_SIZE_BYTES + 1024 * 1024) {
+    return res.status(413).json({ error: 'Chunk too large or missing Content-Length' });
+  }
+
   const buffers = [];
-  for await (const chunk of req) buffers.push(chunk);
+  let received = 0;
+  for await (const chunk of req) {
+    received += chunk.length;
+    if (received > CHUNK_SIZE_BYTES + 1024 * 1024) {
+      return res.status(413).json({ error: 'Chunk too large' });
+    }
+    buffers.push(chunk);
+  }
   const body = Buffer.concat(buffers);
 
   const parts = parseMultipart(body, boundaryMatch[1]);
