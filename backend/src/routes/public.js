@@ -585,8 +585,8 @@ router.post('/upload-assemble/:id', async (req, res) => {
     chunkFiles.push(p);
   }
 
-  const chunkBuffers = chunkFiles.map(p => fs.readFileSync(p));
-  const fileData = Buffer.concat(chunkBuffers);
+  // Stream the chunks from disk instead of loading the whole file into memory.
+  const fileSize = chunkFiles.reduce((n, p) => n + fs.statSync(p).size, 0);
 
   const settingsDb = getDb();
   const urlRow = settingsDb.prepare("SELECT value FROM settings WHERE key = 'immich_url'").get();
@@ -610,29 +610,35 @@ router.post('/upload-assemble/:id', async (req, res) => {
       Buffer.from('\r\n'),
     ]);
 
-    const buildFile = (name, fname, mime, data) => Buffer.concat([
-      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"; filename="${fname}"\r\nContent-Type: ${mime}\r\n\r\n`),
-      data,
-      Buffer.from('\r\n'),
-    ]);
+    const filePrefix = Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="assetData"; filename="${filename}"\r\nContent-Type: ${mimeType}\r\n\r\n`);
+    const fileSuffix = Buffer.from('\r\n');
 
     // Immich v3 removed the deviceId/deviceAssetId properties from
     // AssetMediaCreateDto (POST /assets) — no longer sent here.
-    const bodyBuffer = Buffer.concat([
-      buildFile('assetData', filename, mimeType, fileData),
+    const bodyTail = Buffer.concat([
       buildField('fileCreatedAt', fileCreatedAt || new Date().toISOString()),
       buildField('fileModifiedAt', fileModifiedAt || new Date().toISOString()),
       Buffer.from(`--${boundary}--\r\n`),
     ]);
+    const bodyLength = filePrefix.length + fileSize + fileSuffix.length + bodyTail.length;
+
+    async function* bodyStream() {
+      yield filePrefix;
+      for (const p of chunkFiles) {
+        for await (const buf of fs.createReadStream(p)) yield buf;
+      }
+      yield fileSuffix;
+      yield bodyTail;
+    }
 
     const uploadRes = await fetch(`${immichUrl}/api/assets`, {
       method: 'POST',
       headers: {
         'x-api-key': apiKey,
         'Content-Type': `multipart/form-data; boundary=${boundary}`,
-        'Content-Length': String(bodyBuffer.length),
+        'Content-Length': String(bodyLength),
       },
-      body: bodyBuffer,
+      body: require('stream').Readable.from(bodyStream()),
     });
 
     const uploadData = await uploadRes.json();
