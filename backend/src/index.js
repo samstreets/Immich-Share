@@ -20,7 +20,20 @@ const PORT = process.env.PORT || 3000;
 app.set('trust proxy', 1);
 
 app.use(helmet({
-  contentSecurityPolicy: false,
+  contentSecurityPolicy: {
+    useDefaults: true,
+    directives: {
+      'default-src': ["'self'"],
+      'script-src': ["'self'"],
+      'style-src': ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+      'font-src': ["'self'", 'https://fonts.gstatic.com', 'data:'],
+      'img-src': ["'self'", 'data:', 'blob:'],
+      'media-src': ["'self'", 'blob:'],
+      'connect-src': ["'self'"],
+      'object-src': ["'none'"],
+      'frame-ancestors': ["'self'"],
+    },
+  },
   crossOriginEmbedderPolicy: false,
 }));
 
@@ -62,6 +75,19 @@ const authLimiter = rateLimit({
   handler: (req, res) => res.status(429).json({ error: 'Too many login attempts, please try again later.' }),
 });
 
+// Uploads are exempt from the general limiter (a large file is hundreds of
+// chunk requests) but get their own, higher cap so they can't be abused freely.
+const uploadLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 1500,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res) => res.status(429).json({ error: 'Too many upload requests, please try again later.' }),
+});
+
+app.use('/api/public/upload', uploadLimiter);
+app.use('/api/public/upload-chunk', uploadLimiter);
+app.use('/api/public/upload-assemble', uploadLimiter);
 app.use('/api/', limiter);
 app.use('/api/auth/', authLimiter);
 app.use('/api/public/verify', authLimiter);

@@ -3,7 +3,7 @@ FROM node:20-alpine AS frontend-builder
 
 WORKDIR /app/frontend
 COPY frontend/package*.json ./
-RUN npm install --prefer-offline
+RUN npm ci
 COPY frontend/ ./
 RUN npm run build
 
@@ -15,7 +15,7 @@ RUN apk add --no-cache python3 make g++
 
 WORKDIR /app/backend
 COPY backend/package*.json ./
-RUN npm install --omit=dev
+RUN npm ci --omit=dev
 COPY backend/ ./
 
 # ── Stage 3: Production image ──────────────────────────────────────────────
