@@ -3,6 +3,7 @@ const { getDb } = require('../db');
 const { requireAuth } = require('../middleware/auth');
 const { getAlbums, getAlbum, getAlbumAssets, getTags, testConnection, createAlbum, createTag, tagAssets } = require('../immich');
 const { sendEmail, fireWebhook } = require('../notifications');
+const { assertSafeWebhookUrl } = require('../urlGuard');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -27,7 +28,11 @@ router.get('/settings', (req, res) => {
 });
 
 // Update settings
-router.put('/settings', (req, res) => {
+router.put('/settings', async (req, res) => {
+  if (req.body.global_webhook_url) {
+    try { await assertSafeWebhookUrl(req.body.global_webhook_url); }
+    catch (err) { return res.status(400).json({ error: err.message }); }
+  }
   const db = getDb();
   const allowed = [
     'immich_url', 'immich_api_key', 'external_url', 'app_name', 'allowed_origins',
@@ -90,6 +95,7 @@ router.post('/notifications/test-webhook', async (req, res) => {
   if (!url) return res.status(400).json({ error: 'url is required' });
 
   try {
+    await assertSafeWebhookUrl(url);
     await fireWebhook(url, { event: 'test', timestamp: new Date().toISOString(), message: 'Webhook test from Immich Share' }, secret || null);
     res.json({ ok: true, message: `Webhook fired to ${url}` });
   } catch (err) {

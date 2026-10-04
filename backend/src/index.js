@@ -37,7 +37,7 @@ app.use(cors({
       if (allowed.includes('*') || allowed.includes(origin)) return callback(null, true);
       return callback(new Error('CORS: origin ' + origin + ' not allowed'));
     } catch {
-      return callback(null, true);
+      return callback(new Error('CORS: unable to read allowed origins'));
     }
   },
   credentials: true,

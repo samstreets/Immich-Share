@@ -1,46 +1,11 @@
 require('dotenv').config();
 const express = require('express');
 const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
 const { getDb } = require('../db');
 
 const router = express.Router();
 
-const JWT_SECRET = process.env.JWT_SECRET;
-
-if (!JWT_SECRET) {
-  throw new Error(
-    '[auth] JWT_SECRET environment variable is not set. ' +
-    'Generate a secret with: node -e "console.log(require(\'crypto\').randomBytes(48).toString(\'hex\'))"'
-  );
-}
-
-if (JWT_SECRET.length < 32) {
-  throw new Error(
-    `[auth] JWT_SECRET is too short (${JWT_SECRET.length} chars). ` +
-    'Use at least 32 random characters.'
-  );
-}
-
-function requireAuth(req, res, next) {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-
-  const token = authHeader.split(' ')[1];
-  try {
-    const payload = jwt.verify(token, JWT_SECRET);
-    req.admin = payload;
-    next();
-  } catch (err) {
-    return res.status(401).json({ error: 'Invalid or expired token' });
-  }
-}
-
-function signToken(payload) {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: '24h' });
-}
+const { requireAuth, signToken, signPreAuthToken, verifyToken } = require('../middleware/auth');
 
 // POST /api/auth/login
 // If TOTP is enabled the response includes { totpRequired: true } and a
@@ -65,11 +30,7 @@ router.post('/login', async (req, res) => {
 
   if (user.totp_enabled && user.totp_secret) {
     // Issue a short-lived pre-auth token so the TOTP step can be authenticated
-    const preToken = jwt.sign(
-      { id: user.id, username: user.username, preAuth: true },
-      JWT_SECRET,
-      { expiresIn: '5m' }
-    );
+    const preToken = signPreAuthToken({ id: user.id, username: user.username });
     return res.json({ totpRequired: true, preToken });
   }
 
@@ -86,7 +47,7 @@ router.post('/totp-verify', (req, res) => {
 
   let payload;
   try {
-    payload = jwt.verify(preToken, JWT_SECRET);
+    payload = verifyToken(preToken);
   } catch {
     return res.status(401).json({ error: 'Pre-auth token invalid or expired' });
   }

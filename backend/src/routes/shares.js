@@ -4,6 +4,7 @@ const { v4: uuidv4 } = require('uuid');
 const crypto = require('crypto');
 const { getDb } = require('../db');
 const { requireAuth } = require('../middleware/auth');
+const { assertSafeWebhookUrl } = require('../urlGuard');
 const { generateQR, matrixToSVG } = require('../qr');
 
 const router = express.Router();
@@ -306,6 +307,11 @@ router.post('/', async (req, res) => {
     return res.status(400).json({ error: 'max_views must be a positive integer' });
   }
 
+  if (webhook_url) {
+    try { await assertSafeWebhookUrl(webhook_url); }
+    catch (err) { return res.status(400).json({ error: err.message }); }
+  }
+
   const id = uuidv4();
   const passwordHash = await bcrypt.hash(password, 10);
   const db = getDb();
@@ -363,6 +369,11 @@ router.patch('/:id', async (req, res) => {
     webhook_url,
     notify_email,
   } = req.body;
+
+  if (webhook_url) {
+    try { await assertSafeWebhookUrl(webhook_url); }
+    catch (err) { return res.status(400).json({ error: err.message }); }
+  }
 
   let passwordHash = share.password_hash;
   if (password) {

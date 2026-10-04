@@ -15,6 +15,17 @@ const MAX_UPLOAD_BYTES  = MAX_CHUNKS * 50 * 1024 * 1024;
 const CHUNK_SIZE_BYTES  = 50 * 1024 * 1024;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// Strip path separators, quotes and control characters from client filenames.
+function sanitizeFilename(name) {
+  const base = String(name || '').split(/[\\/]/).pop();
+  const clean = base.replace(/[\x00-\x1f\x7f"\\]/g, '_').trim().slice(0, 200);
+  return clean || 'upload';
+}
+
+function viewLimitReached(share) {
+  return share.max_views != null && share.view_count >= share.max_views;
+}
+
 function logAccess(share, req, action = 'view') {
   try {
     const db = getDb();
@@ -97,6 +108,7 @@ router.get('/token-access/:id', (req, res) => {
   }
 
   if (!match) return res.status(401).json({ error: 'Invalid access token' });
+  if (viewLimitReached(share)) return res.status(410).json({ error: 'This share has reached its view limit' });
 
   logAccess(share, req, 'view');
 
@@ -127,6 +139,7 @@ router.post('/verify/:id', async (req, res) => {
 
   const valid = await bcrypt.compare(password, share.password_hash);
   if (!valid) return res.status(401).json({ error: 'Incorrect password' });
+  if (viewLimitReached(share)) return res.status(410).json({ error: 'This share has reached its view limit' });
 
   logAccess(share, req, 'view');
 
@@ -486,11 +499,17 @@ router.post('/upload-chunk/:id', async (req, res) => {
   fs.writeFileSync(chunkPath, chunkBuffer, { mode: 0o600 });
 
   const metaPath = pathLib.join(tmpDir, 'meta.json');
-  if (!fs.existsSync(metaPath)) {
+  if (fs.existsSync(metaPath)) {
+    try {
+      if (JSON.parse(fs.readFileSync(metaPath, 'utf8')).shareId !== share.id) {
+        return res.status(403).json({ error: 'Upload belongs to a different share' });
+      }
+    } catch {}
+  } else {
     fs.writeFileSync(metaPath, JSON.stringify({
       uploadId,
       totalChunks: parsedTotal,
-      filename: filename || uploadId,
+      filename: sanitizeFilename(filename || uploadId),
       shareId: share.id,
       createdAt: Date.now(),
     }), { mode: 0o600 });
@@ -509,7 +528,8 @@ router.post('/upload-assemble/:id', async (req, res) => {
   if (!verifyToken(share.id, sessionToken)) return res.status(401).json({ error: 'Invalid or expired session.' });
   if (!share.allow_upload) return res.status(403).json({ error: 'Uploads not allowed' });
 
-  const { uploadId, filename, fileCreatedAt, fileModifiedAt } = req.body;
+  const { uploadId, filename: rawFilename, fileCreatedAt, fileModifiedAt } = req.body;
+  const filename = rawFilename ? sanitizeFilename(rawFilename) : rawFilename;
   if (!uploadId || !filename) return res.status(400).json({ error: 'Missing uploadId or filename' });
 
   if (!UUID_RE.test(uploadId)) {
@@ -528,6 +548,10 @@ router.post('/upload-assemble/:id', async (req, res) => {
     meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
   } catch {
     return res.status(500).json({ error: 'Could not read upload session metadata' });
+  }
+
+  if (meta.shareId !== share.id) {
+    return res.status(403).json({ error: 'Upload belongs to a different share' });
   }
 
   if (meta.totalChunks > MAX_CHUNKS) {
@@ -659,6 +683,10 @@ router.delete('/upload-chunk/:id/:uploadId', (req, res) => {
 
   const tmpDir = pathLib.join(os.tmpdir(), 'immich-share-chunks', req.params.uploadId);
   try {
+    const metaPath = pathLib.join(tmpDir, 'meta.json');
+    if (fs.existsSync(metaPath) && JSON.parse(fs.readFileSync(metaPath, 'utf8')).shareId !== share.id) {
+      return res.status(403).json({ error: 'Upload belongs to a different share' });
+    }
     if (fs.existsSync(tmpDir)) fs.rmSync(tmpDir, { recursive: true, force: true });
   } catch {}
   res.json({ ok: true });
