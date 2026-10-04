@@ -184,10 +184,20 @@ function initDb() {
   // Create default admin if none exists
   const adminCount = db.prepare('SELECT COUNT(*) as count FROM admin_users').get();
   if (adminCount.count === 0) {
-    const defaultPassword = process.env.ADMIN_PASSWORD || 'admin';
+    let defaultPassword = process.env.ADMIN_PASSWORD;
+    let generated = false;
+    if (!defaultPassword || defaultPassword === 'admin' || defaultPassword.length < 8) {
+      defaultPassword = require('crypto').randomBytes(12).toString('base64url');
+      generated = true;
+    }
     const hash = bcrypt.hashSync(defaultPassword, 12);
     db.prepare('INSERT INTO admin_users (username, password_hash) VALUES (?, ?)').run('admin', hash);
-    console.log(`✅ Default admin created (username: admin). Change the password in Settings immediately!`);
+    if (generated) {
+      console.log(`✅ Admin created (username: admin). ADMIN_PASSWORD was unset or weak, so a random password was generated: ${defaultPassword}`);
+      console.log('   Log in and change it in Settings. This is shown only once.');
+    } else {
+      console.log('✅ Admin created (username: admin) using ADMIN_PASSWORD.');
+    }
   }
 
   // Default settings — seed from env vars on first boot only

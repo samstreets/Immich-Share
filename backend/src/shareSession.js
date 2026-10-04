@@ -16,14 +16,17 @@ const crypto = require('crypto');
 // omitted JWT_SECRET. We now share the same secret and rely on the startup
 // guard in middleware/auth.js to ensure it is set before any request is served.
 // If this module is somehow loaded before auth.js the guard below catches it.
-const SESSION_SECRET = process.env.JWT_SECRET;
+const JWT_SECRET = process.env.JWT_SECRET;
 
-if (!SESSION_SECRET || SESSION_SECRET.length < 32) {
+if (!JWT_SECRET || JWT_SECRET.length < 32) {
   throw new Error(
     '[shareSession] JWT_SECRET is missing or too short. ' +
     'See middleware/auth.js for setup instructions.'
   );
 }
+
+// Derive a separate key so share tokens and admin JWTs never share key material.
+const SESSION_SECRET = crypto.createHmac('sha256', JWT_SECRET).update('immich-share:share-session').digest();
 
 const SESSION_TTL_MS = 8 * 60 * 60 * 1000; // 8 hours
 

@@ -8,6 +8,9 @@
  */
 
 const { getDb } = require('./db');
+const { assertSafeWebhookUrl } = require('./urlGuard');
+
+const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -78,7 +81,8 @@ async function fireWebhook(url, payload, secret) {
   }
 
   try {
-    const res = await fetch(url, { method: 'POST', headers, body, timeout: 10000 });
+    await assertSafeWebhookUrl(url);
+    const res = await fetch(url, { method: 'POST', headers, body, timeout: 10000, redirect: 'manual' });
     console.log(`[notify] Webhook ${url} → HTTP ${res.status}`);
   } catch (err) {
     console.error(`[notify] Webhook ${url} failed: ${err.message}`);
@@ -113,18 +117,18 @@ async function notifyUpload(share, ctx) {
 
   const html = `
     <div style="font-family:sans-serif;max-width:520px">
-      <h2 style="color:#c4a44a">New upload to &ldquo;${share.name}&rdquo;</h2>
+      <h2 style="color:#c4a44a">New upload to &ldquo;${esc(share.name)}&rdquo;</h2>
       <table style="border-collapse:collapse;width:100%">
-        <tr><td style="padding:6px 0;color:#666;width:100px">File</td><td style="padding:6px 0"><strong>${ctx.filename || '—'}</strong></td></tr>
-        <tr><td style="padding:6px 0;color:#666">Asset ID</td><td style="padding:6px 0;font-family:monospace;font-size:0.85em">${ctx.assetId || '—'}</td></tr>
-        <tr><td style="padding:6px 0;color:#666">IP</td><td style="padding:6px 0;font-family:monospace">${ctx.ip || '—'}</td></tr>
+        <tr><td style="padding:6px 0;color:#666;width:100px">File</td><td style="padding:6px 0"><strong>${esc(ctx.filename || '—')}</strong></td></tr>
+        <tr><td style="padding:6px 0;color:#666">Asset ID</td><td style="padding:6px 0;font-family:monospace;font-size:0.85em">${esc(ctx.assetId || '—')}</td></tr>
+        <tr><td style="padding:6px 0;color:#666">IP</td><td style="padding:6px 0;font-family:monospace">${esc(ctx.ip || '—')}</td></tr>
       </table>
       <p style="margin-top:16px">
-        <a href="${shareUrl}" style="background:#c4a44a;color:#0d0a00;padding:8px 18px;border-radius:999px;text-decoration:none;font-weight:700">
+        <a href="${esc(shareUrl)}" style="background:#c4a44a;color:#0d0a00;padding:8px 18px;border-radius:999px;text-decoration:none;font-weight:700">
           View Share →
         </a>
       </p>
-      <p style="color:#999;font-size:0.8em;margin-top:20px">Sent by ${appName}</p>
+      <p style="color:#999;font-size:0.8em;margin-top:20px">Sent by ${esc(appName)}</p>
     </div>
   `;
 
