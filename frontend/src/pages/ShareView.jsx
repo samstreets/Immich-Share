@@ -256,9 +256,14 @@ function UploadPanel({ shareId, sessionToken, onUploaded }) {
   const [results, setResults] = useState([])
   const [dragOver, setDragOver] = useState(false)
   const inputRef = useRef()
+  const filesInputRef = useRef()
+
+  // Document pickers sometimes report an empty MIME type (e.g. HEIC/DNG), so fall back to the extension
+  const MEDIA_EXT = /\.(jpe?g|png|gif|webp|heic|heif|avif|tiff?|bmp|dng|arw|cr2|cr3|nef|orf|raf|rw2|mp4|mov|m4v|avi|mkv|webm|3gp)$/i
+  function isMedia(f) { return f.type.startsWith('image/') || f.type.startsWith('video/') || MEDIA_EXT.test(f.name) }
 
   function addFiles(incoming) {
-    const arr = Array.from(incoming).filter(f => f.type.startsWith('image/') || f.type.startsWith('video/'))
+    const arr = Array.from(incoming).filter(isMedia)
     setFiles(prev => {
       const existing = new Set(prev.map(f => f.name + f.size))
       return [...prev, ...arr.filter(f => !existing.has(f.name + f.size))]
@@ -301,7 +306,12 @@ function UploadPanel({ shareId, sessionToken, onUploaded }) {
         <div style={{ fontSize: '2rem', marginBottom: 8 }}>📷</div>
         <div style={{ fontSize: '0.875rem', color: 'rgba(255,255,255,0.5)', fontWeight: 500 }}>Drop photos &amp; videos or <span style={{ color: '#c4a44a', fontWeight: 700 }}>browse</span></div>
         <div style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.3)', marginTop: 5 }}>JPG, PNG, HEIC, MP4, MOV and more · large files split automatically</div>
-        <input ref={inputRef} type="file" multiple accept="image/*,video/*" style={{ display: 'none' }} onChange={e => addFiles(e.target.files)} />
+        <input ref={inputRef} type="file" multiple accept="image/*,video/*" style={{ display: 'none' }} onChange={e => { addFiles(e.target.files); e.target.value = '' }} />
+      </div>
+      <div style={{ marginBottom: 12, fontSize: '0.75rem', color: 'rgba(255,255,255,0.4)' }}>
+        <button type="button" onClick={() => filesInputRef.current?.click()} disabled={uploading} style={{ background: 'none', border: '1px solid rgba(255,255,255,0.2)', color: 'rgba(255,255,255,0.7)', borderRadius: 999, padding: '5px 12px', fontSize: '0.75rem', fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>📁 Upload as files (keep location)</button>
+        <span style={{ marginLeft: 8 }}>Phone photo pickers strip GPS data; picking from Files keeps the original metadata.</span>
+        <input ref={filesInputRef} type="file" multiple style={{ display: 'none' }} onChange={e => { addFiles(e.target.files); e.target.value = '' }} />
       </div>
       {files.length > 0 && (
         <div style={{ marginBottom: 12 }}>
