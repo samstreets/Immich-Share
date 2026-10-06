@@ -42,7 +42,10 @@ cp .env.example .env
 docker compose up -d
 
 # 4. Open http://localhost:3000
-# Login: admin / admin  (change immediately in Settings!)
+# Login: admin / <ADMIN_PASSWORD from .env>
+#   If ADMIN_PASSWORD is unset, "admin" or under 8 chars, a random password is
+#   generated on first boot and printed once in the container logs
+#   (docker compose logs immich-share). Change it in Settings.
 ```
 
 ---
@@ -57,7 +60,7 @@ Settings can be configured via **environment variables** (seed on first boot) **
 | `IMMICH_URL` | No* | URL of your Immich instance, e.g. `http://192.168.1.100:2283` |
 | `IMMICH_API_KEY` | No* | API key from Immich → Account Settings → API Keys |
 | `EXTERNAL_URL` | No* | Public URL of this app — used in share links |
-| `ADMIN_PASSWORD` | No | Default admin password (first run only, default: `admin`) |
+| `ADMIN_PASSWORD` | No | Initial admin password (first run only, min 8 chars). If unset or weak, a random one is generated and logged once |
 | `PORT` | No | Port to listen on (default: `3000`) |
 | `DB_PATH` | No | Path to SQLite database (default: `/app/data/app.db`) |
 | `ALLOWED_ORIGINS` | No | Newline-separated list of allowed CORS origins (empty = allow all) |
@@ -66,7 +69,7 @@ Settings can be configured via **environment variables** (seed on first boot) **
 | `SMTP_USER` | No | SMTP username |
 | `SMTP_PASS` | No | SMTP password |
 | `SMTP_FROM` | No | From address for notification emails |
-| `GLOBAL_WEBHOOK_URL` | No | Webhook URL fired on every upload across all shares |
+| `GLOBAL_WEBHOOK_URL` | No | Webhook URL fired for enabled notification events across all shares |
 | `GLOBAL_WEBHOOK_SECRET` | No | HMAC-SHA256 signing secret for the global webhook |
 | `CLEANUP_INTERVAL_MS` | No | How often the cleanup job runs (default: 30 minutes) |
 | `WATCH_INTERVAL_MS` | No | How often the album watcher runs (default: 5 minutes) |
@@ -171,8 +174,27 @@ When uploads are enabled, select one or more Immich tags to be automatically app
 ### Album Watcher
 For album shares, configure "watch tags" — the watcher runs every 5 minutes and applies those tags to any assets that have been newly added to the album since the last check.
 
+### Photo Metadata
+Enable **Show metadata** on a share and viewers get an **Info** button (or press `i`) in the lightbox showing date taken, dimensions, file size, camera, lens and exposure. Only a fixed set of EXIF fields is ever sent to viewers. Location (city/country and a map link) is hidden unless you also tick **Include location (GPS)** on that share.
+
 ### Notifications
-Configure SMTP settings globally and set a per-share **notify email** to receive an alert whenever someone uploads a file. Webhooks (global or per-share) fire a signed JSON payload on each upload and can be used to trigger automations.
+Configure SMTP settings globally, then choose which events trigger alerts under **Settings → Notification Triggers**:
+
+| Event | Default |
+|---|---|
+| A file is uploaded | On |
+| A share is opened for the first time | Off |
+| A share reaches its view limit | Off |
+| A wrong password is entered (max 1 alert per IP per 15 min) | Off |
+| A share is about to expire (reminder) | Off |
+| A share has expired | Off |
+
+Alerts are sent to the share's **notify email**, the **admin notification email** (if set), the per-share webhook and the global webhook. Webhooks receive a JSON payload with an `event` field (`upload`, `first_view`, `view_limit_reached`, `password_failed`, `expiry_reminder`, `expired`), signed with HMAC-SHA256 when a secret is set.
+
+**Expiry reminders** are sent a configurable number of hours before expiry (default 48) by the cleanup job, once per expiry date. Editing a share's expiry date re-arms the reminder.
+
+### Two-Factor Authentication
+Enable TOTP under **Settings → Two-Factor Authentication**: scan the QR code with an authenticator app and confirm with a code. Disabling requires your password.
 
 ---
 
