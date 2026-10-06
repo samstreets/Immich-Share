@@ -92,7 +92,7 @@ router.get('/', (req, res) => {
 
   const shares = db.prepare(`
     SELECT id, slug, name, description, share_type, immich_album_id, immich_tag_id,
-           expires_at, allow_download, allow_upload, show_metadata,
+           expires_at, allow_download, allow_upload, show_metadata, show_location,
            upload_tag_ids, watch_tag_ids,
            access_token, max_views, webhook_url, notify_email,
            view_count, created_at, updated_at, is_active
@@ -254,6 +254,7 @@ router.post('/', async (req, res) => {
     allow_download,
     allow_upload,
     show_metadata,
+    show_location,
     upload_tag_ids: rawUploadTagIds,
     watch_tag_ids: rawWatchTagIds,
     slug: rawSlug,
@@ -320,9 +321,9 @@ router.post('/', async (req, res) => {
     db.prepare(`
       INSERT INTO shares (
         id, slug, name, description, share_type, immich_album_id, immich_tag_id,
-        password_hash, expires_at, allow_download, allow_upload, show_metadata,
+        password_hash, expires_at, allow_download, allow_upload, show_metadata, show_location,
         upload_tag_ids, watch_tag_ids, max_views, webhook_url, notify_email
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id, slug, name, description || null, share_type,
       immich_album_id || null,
@@ -332,6 +333,7 @@ router.post('/', async (req, res) => {
       allow_download !== false ? 1 : 0,
       allow_upload ? 1 : 0,
       show_metadata ? 1 : 0,
+      show_location ? 1 : 0,
       uploadTagIds,
       watchTagIds,
       maxViews,
@@ -361,7 +363,7 @@ router.patch('/:id', async (req, res) => {
 
   const {
     name, description, password, expires_at,
-    allow_download, allow_upload, show_metadata, is_active,
+    allow_download, allow_upload, show_metadata, show_location, is_active,
     upload_tag_ids: rawUploadTagIds,
     watch_tag_ids: rawWatchTagIds,
     slug: rawSlug,
@@ -409,6 +411,7 @@ router.patch('/:id', async (req, res) => {
   const updatedDownload    = allow_download !== undefined ? (allow_download ? 1 : 0) : share.allow_download;
   const updatedUpload      = allow_upload !== undefined ? (allow_upload ? 1 : 0) : share.allow_upload;
   const updatedMetadata    = show_metadata !== undefined ? (show_metadata ? 1 : 0) : share.show_metadata;
+  const updatedLocation    = show_location !== undefined ? (show_location ? 1 : 0) : share.show_location;
   const updatedActive      = is_active !== undefined ? (is_active ? 1 : 0) : share.is_active;
   const updatedWebhook     = webhook_url !== undefined ? (webhook_url || null) : share.webhook_url;
   const updatedEmail       = notify_email !== undefined ? (notify_email || null) : share.notify_email;
@@ -436,6 +439,9 @@ router.patch('/:id', async (req, res) => {
         allow_download = ?,
         allow_upload = ?,
         show_metadata = ?,
+        show_location = ?,
+        expiry_reminded_at = CASE WHEN expires_at IS ? THEN expiry_reminded_at ELSE NULL END,
+        expired_notified_at = CASE WHEN expires_at IS ? THEN expired_notified_at ELSE NULL END,
         upload_tag_ids = ?,
         watch_tag_ids = ?,
         is_active = ?,
@@ -446,7 +452,8 @@ router.patch('/:id', async (req, res) => {
       WHERE id = ?
     `).run(
       slug, updatedName, updatedDescription, passwordHash,
-      updatedExpiresAt, updatedDownload, updatedUpload, updatedMetadata,
+      updatedExpiresAt, updatedDownload, updatedUpload, updatedMetadata, updatedLocation,
+      updatedExpiresAt, updatedExpiresAt,
       updatedUploadTagIds, updatedWatchTagIds, updatedActive,
       maxViews, updatedWebhook, updatedEmail,
       req.params.id

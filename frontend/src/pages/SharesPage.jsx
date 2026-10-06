@@ -586,6 +586,7 @@ function ShareModal({ onClose, onSaved, editShare }) {
     allow_download: editShare?.allow_download !== false,
     allow_upload: editShare?.allow_upload || false,
     show_metadata: editShare?.show_metadata || false,
+    show_location: editShare?.show_location || false,
     upload_tag_ids: existingTagIds,
     watch_tag_ids: editShare?.watch_tag_ids
       ? editShare.watch_tag_ids.split(',').map(s => s.trim()).filter(Boolean)
@@ -651,6 +652,7 @@ function ShareModal({ onClose, onSaved, editShare }) {
             allow_download: form.allow_download,
             allow_upload: form.allow_upload,
             show_metadata: form.show_metadata,
+            show_location: form.show_metadata && form.show_location,
             upload_tag_ids: uploadTagIdsStr,
             slug: form.slug,
           },
@@ -670,6 +672,7 @@ function ShareModal({ onClose, onSaved, editShare }) {
             allow_download: form.allow_download,
             allow_upload: form.allow_upload,
             show_metadata: form.show_metadata,
+            show_location: form.show_metadata && form.show_location,
             upload_tag_ids: uploadTagIdsStr,
             slug: form.slug || undefined,
           },
@@ -882,6 +885,9 @@ function ShareModal({ onClose, onSaved, editShare }) {
               <CheckBox checked={form.allow_download} onChange={v => set('allow_download', v)} label="Allow downloads" />
               <CheckBox checked={form.allow_upload} onChange={v => set('allow_upload', v)} label="Allow uploads" />
               <CheckBox checked={form.show_metadata} onChange={v => set('show_metadata', v)} label="Show metadata" />
+              {form.show_metadata && (
+                <CheckBox checked={form.show_location} onChange={v => set('show_location', v)} label="Include location (GPS)" />
+              )}
             </div>
 
             {/* Upload tags — only visible when uploads are enabled */}

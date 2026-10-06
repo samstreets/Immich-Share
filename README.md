@@ -18,7 +18,8 @@ A self-hosted web app that sits alongside your [Immich](https://immich.app) inst
 - 🖼 **Lightbox viewer** — full-screen photo/video viewer with pinch-to-zoom, drag-to-pan, and keyboard navigation
 - ✅ **Drag-to-select** — select multiple photos in the gallery and bulk-download as ZIP
 - 📊 **Admin dashboard** — stats, per-share activity charts, access logs with export (CSV/JSON)
-- 🔔 **Notifications** — email (SMTP) and webhook alerts on upload, per-share or global
+- 🔔 **Notification triggers** — email (SMTP) and webhook alerts for uploads, first view, view limit reached, failed password, expiry reminders and expiry; toggle each in Settings
+- 📷 **Photo metadata** — optional per-share details panel (camera, lens, exposure, size, date) with an opt-in location (GPS) toggle
 - 🔐 **Two-factor authentication** — TOTP (Google Authenticator, Authy, etc.) for the admin login
 - 🧹 **Scheduled cleanup** — auto-purge expired shares and orphaned upload chunks
 - 📱 **Mobile-friendly admin** — responsive sidebar + bottom nav for phones

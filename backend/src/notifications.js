@@ -89,39 +89,92 @@ async function fireWebhook(url, payload, secret) {
   }
 }
 
-// ── Main: notify on upload ────────────────────────────────────────────────────
+// ── Events ────────────────────────────────────────────────────────────────────
+
+// event name → { setting toggle, email subject/lines builder }
+const EVENTS = {
+  upload: {
+    setting: 'notify_on_upload',
+    title: (share) => `New upload to "${share.name}"`,
+    lines: (share, ctx) => [
+      ['File', ctx.filename || 'unknown'],
+      ['Asset ID', ctx.assetId || 'unknown'],
+      ['IP', ctx.ip || 'unknown'],
+    ],
+    intro: (share) => `A new file was uploaded to your share "${share.name}".`,
+  },
+  first_view: {
+    setting: 'notify_on_first_view',
+    title: (share) => `"${share.name}" was opened for the first time`,
+    lines: (share, ctx) => [['IP', ctx.ip || 'unknown'], ['User agent', ctx.userAgent || 'unknown']],
+    intro: (share) => `Someone opened your share "${share.name}" for the first time.`,
+  },
+  view_limit_reached: {
+    setting: 'notify_on_view_limit',
+    title: (share) => `"${share.name}" reached its view limit`,
+    lines: (share) => [['Views', `${share.view_count} / ${share.max_views}`]],
+    intro: (share) => `Your share "${share.name}" reached its view limit and has been disabled.`,
+  },
+  password_failed: {
+    setting: 'notify_on_password_failed',
+    title: (share) => `Failed password attempt on "${share.name}"`,
+    lines: (share, ctx) => [['IP', ctx.ip || 'unknown'], ['User agent', ctx.userAgent || 'unknown']],
+    intro: (share) => `Someone entered the wrong password for your share "${share.name}".`,
+  },
+  expiry_reminder: {
+    setting: 'notify_on_expiry_reminder',
+    title: (share) => `"${share.name}" expires soon`,
+    lines: (share, ctx) => [
+      ['Expires', ctx.expiresAt || share.expires_at || 'unknown'],
+      ['Time left', ctx.timeLeft || 'unknown'],
+    ],
+    intro: (share) => `Your share "${share.name}" is about to expire. Edit it in the admin panel to extend it.`,
+  },
+  expired: {
+    setting: 'notify_on_expired',
+    title: (share) => `"${share.name}" has expired`,
+    lines: (share, ctx) => [['Expired', ctx.expiresAt || share.expires_at || 'unknown']],
+    intro: (share) => `Your share "${share.name}" has expired.`,
+  },
+};
+
+function buildShareUrl(settings, share) {
+  const externalUrl = (settings.external_url || '').replace(/\/$/, '');
+  return `${externalUrl}/s/${share.slug || share.id}`;
+}
 
 /**
+ * Generic notifier. Sends to the per-share email/webhook, the admin email
+ * (settings.notify_admin_email) and the global webhook, provided the event
+ * is enabled in settings. Never throws.
+ *
+ * @param {string} event   key of EVENTS
  * @param {object} share   Full share row from DB
- * @param {object} ctx     { assetId, filename, ip, appName, externalUrl }
+ * @param {object} ctx     event-specific context (ip, userAgent, filename, ...)
  */
-async function notifyUpload(share, ctx) {
-  const settings = getSettings();
-  const appName = settings.app_name || 'Immich Share';
-  const externalUrl = (settings.external_url || '').replace(/\/$/, '');
-  const shareUrl = share.slug
-    ? `${externalUrl}/s/${share.slug}`
-    : `${externalUrl}/s/${share.id}`;
+async function notifyEvent(event, share, ctx = {}) {
+  try {
+    const def = EVENTS[event];
+    if (!def) return;
 
-  const subject = `[${appName}] New upload to "${share.name}"`;
-  const text = [
-    `A new file was uploaded to your share "${share.name}".`,
-    '',
-    `File: ${ctx.filename || 'unknown'}`,
-    `Asset ID: ${ctx.assetId || 'unknown'}`,
-    `IP: ${ctx.ip || 'unknown'}`,
-    `Share URL: ${shareUrl}`,
-    '',
-    `— ${appName}`,
-  ].join('\n');
+    const settings = getSettings();
+    // upload defaults to on for backwards compatibility; others default to off
+    const enabled = settings[def.setting] === undefined ? event === 'upload' : settings[def.setting] === '1';
+    if (!enabled) return;
 
-  const html = `
+    const appName = settings.app_name || 'Immich Share';
+    const shareUrl = buildShareUrl(settings, share);
+    const title = def.title(share);
+    const rows = def.lines(share, ctx);
+
+    const subject = `[${appName}] ${title}`;
+    const text = [def.intro(share), '', ...rows.map(([k, v]) => `${k}: ${v}`), `Share URL: ${shareUrl}`, '', `— ${appName}`].join('\n');
+    const html = `
     <div style="font-family:sans-serif;max-width:520px">
-      <h2 style="color:#c4a44a">New upload to &ldquo;${esc(share.name)}&rdquo;</h2>
+      <h2 style="color:#c4a44a">${esc(title)}</h2>
+      <p>${esc(def.intro(share))}</p>
       <table style="border-collapse:collapse;width:100%">
-        <tr><td style="padding:6px 0;color:#666;width:100px">File</td><td style="padding:6px 0"><strong>${esc(ctx.filename || '—')}</strong></td></tr>
-        <tr><td style="padding:6px 0;color:#666">Asset ID</td><td style="padding:6px 0;font-family:monospace;font-size:0.85em">${esc(ctx.assetId || '—')}</td></tr>
-        <tr><td style="padding:6px 0;color:#666">IP</td><td style="padding:6px 0;font-family:monospace">${esc(ctx.ip || '—')}</td></tr>
+        ${rows.map(([k, v]) => `<tr><td style="padding:6px 0;color:#666;width:100px">${esc(k)}</td><td style="padding:6px 0">${esc(v)}</td></tr>`).join('')}
       </table>
       <p style="margin-top:16px">
         <a href="${esc(shareUrl)}" style="background:#c4a44a;color:#0d0a00;padding:8px 18px;border-radius:999px;text-decoration:none;font-weight:700">
@@ -129,33 +182,36 @@ async function notifyUpload(share, ctx) {
         </a>
       </p>
       <p style="color:#999;font-size:0.8em;margin-top:20px">Sent by ${esc(appName)}</p>
-    </div>
-  `;
+    </div>`;
 
-  const webhookPayload = {
-    event: 'upload',
-    share: { id: share.id, slug: share.slug, name: share.name, url: shareUrl },
-    upload: { assetId: ctx.assetId, filename: ctx.filename, ip: ctx.ip },
-    timestamp: new Date().toISOString(),
-  };
+    const payload = {
+      event,
+      share: { id: share.id, slug: share.slug, name: share.name, url: shareUrl },
+      details: Object.fromEntries(rows.map(([k, v]) => [k.toLowerCase().replace(/\s+/g, '_'), v])),
+      timestamp: new Date().toISOString(),
+    };
+    // Keep the original upload payload shape for existing webhook consumers
+    if (event === 'upload') {
+      payload.upload = { assetId: ctx.assetId, filename: ctx.filename, ip: ctx.ip };
+    }
 
-  // Run all notifications concurrently (errors are swallowed inside each fn)
-  await Promise.allSettled([
-    // Per-share email
-    share.notify_email
-      ? sendEmail({ to: share.notify_email, subject, text, html })
-      : Promise.resolve(),
+    const emails = [...new Set([share.notify_email, settings.notify_admin_email].filter(Boolean))];
 
-    // Per-share webhook
-    share.webhook_url
-      ? fireWebhook(share.webhook_url, webhookPayload, null)
-      : Promise.resolve(),
-
-    // Global webhook
-    settings.global_webhook_url
-      ? fireWebhook(settings.global_webhook_url, webhookPayload, settings.global_webhook_secret)
-      : Promise.resolve(),
-  ]);
+    await Promise.allSettled([
+      ...emails.map(to => sendEmail({ to, subject, text, html })),
+      share.webhook_url ? fireWebhook(share.webhook_url, payload, null) : Promise.resolve(),
+      settings.global_webhook_url
+        ? fireWebhook(settings.global_webhook_url, payload, settings.global_webhook_secret)
+        : Promise.resolve(),
+    ]);
+  } catch (err) {
+    console.error(`[notify] ${event} notification failed: ${err.message}`);
+  }
 }
 
-module.exports = { notifyUpload, sendEmail, fireWebhook };
+/** Back-compat wrapper used by upload routes. */
+function notifyUpload(share, ctx) {
+  return notifyEvent('upload', share, ctx);
+}
+
+module.exports = { notifyEvent, notifyUpload, sendEmail, fireWebhook };
