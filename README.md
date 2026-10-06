@@ -72,6 +72,7 @@ Settings can be configured via **environment variables** (seed on first boot) **
 | `GLOBAL_WEBHOOK_URL` | No | Webhook URL fired for enabled notification events across all shares |
 | `GLOBAL_WEBHOOK_SECRET` | No | HMAC-SHA256 signing secret for the global webhook |
 | `CLEANUP_INTERVAL_MS` | No | How often the cleanup job runs (default: 30 minutes) |
+| `MEDIA_RATE_LIMIT` | No | Max thumbnail/preview/download requests per IP per 15 min (default: 30000) |
 | `WATCH_INTERVAL_MS` | No | How often the album watcher runs (default: 5 minutes) |
 
 *These can be set via the Settings UI after first boot.

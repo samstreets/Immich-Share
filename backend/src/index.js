@@ -62,7 +62,8 @@ const limiter = rateLimit({
   max: 1000,
   standardHeaders: true,
   legacyHeaders: false,
-  skip: (req) => req.path.includes('/upload'),
+  // Uploads and media proxy requests have their own limiters below
+  skip: (req) => req.path.includes('/upload') || req.path.startsWith('/proxy/'),
   handler: (req, res) =>
     res.status(429).json({ error: 'Too many requests, please try again later.' }),
 });
@@ -85,6 +86,18 @@ const uploadLimiter = rateLimit({
   handler: (req, res) => res.status(429).json({ error: 'Too many upload requests, please try again later.' }),
 });
 
+// Every thumbnail/preview in a gallery is a separate request, so a large album
+// can easily exceed the general limit on a single page load. Media requests are
+// cheap to count separately; this cap only guards against runaway abuse.
+const mediaLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: parseInt(process.env.MEDIA_RATE_LIMIT || '30000', 10),
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res) => res.status(429).json({ error: 'Too many media requests, please try again later.' }),
+});
+
+app.use('/api/proxy', mediaLimiter);
 app.use('/api/public/upload', uploadLimiter);
 app.use('/api/public/upload-chunk', uploadLimiter);
 app.use('/api/public/upload-assemble', uploadLimiter);
