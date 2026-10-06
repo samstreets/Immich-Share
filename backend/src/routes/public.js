@@ -6,7 +6,7 @@ const pathLib = require('path');
 const { getDb } = require('../db');
 const { getAlbumAssets, getAssetsByTag, proxyAssetOriginal, tagAssets } = require('../immich');
 const { makeToken, verifyToken } = require('../shareSession');
-const { notifyUpload } = require('../notifications');
+const { notifyUpload, notifyEvent } = require('../notifications');
 
 const router = express.Router();
 
@@ -20,6 +20,25 @@ function sanitizeFilename(name) {
   const base = String(name || '').split(/[\\/]/).pop();
   const clean = base.replace(/[\x00-\x1f\x7f"\\]/g, '_').trim().slice(0, 200);
   return clean || 'upload';
+}
+
+// Whitelist of EXIF fields exposed to viewers. GPS/location fields are only
+// included when the share explicitly allows it, and raw Immich fields we
+// don't list (e.g. descriptions, internal ids) are never passed through.
+const EXIF_FIELDS = [
+  'make', 'model', 'lensModel', 'fNumber', 'exposureTime', 'iso', 'focalLength',
+  'exifImageWidth', 'exifImageHeight', 'fileSizeInByte', 'dateTimeOriginal', 'orientation',
+];
+const EXIF_LOCATION_FIELDS = ['latitude', 'longitude', 'city', 'state', 'country'];
+
+function sanitizeExif(exif, showLocation) {
+  if (!exif || typeof exif !== 'object') return undefined;
+  const out = {};
+  for (const k of EXIF_FIELDS) if (exif[k] != null) out[k] = exif[k];
+  if (showLocation) {
+    for (const k of EXIF_LOCATION_FIELDS) if (exif[k] != null) out[k] = exif[k];
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 function viewLimitReached(share) {
@@ -40,8 +59,28 @@ function logAccess(share, req, action = 'view') {
     );
     if (action === 'view') {
       db.prepare('UPDATE shares SET view_count = view_count + 1 WHERE id = ?').run(share.id);
+      // Atomic claim so concurrent first views only notify once
+      const claimed = db.prepare(
+        'UPDATE shares SET first_viewed_at = CURRENT_TIMESTAMP WHERE id = ? AND first_viewed_at IS NULL'
+      ).run(share.id);
+      if (claimed.changes > 0) {
+        notifyEvent('first_view', share, { ip: req.ip, userAgent: req.headers['user-agent'] || '' }).catch(() => {});
+      }
     }
   } catch (_) {}
+}
+
+// Throttle failed-password alerts to one per share+IP per 15 minutes
+const failedNotified = new Map();
+function notifyPasswordFailed(share, req) {
+  const key = `${share.id}|${req.ip}`;
+  const now = Date.now();
+  if (now - (failedNotified.get(key) || 0) < 15 * 60 * 1000) return;
+  failedNotified.set(key, now);
+  if (failedNotified.size > 5000) {
+    for (const [k, t] of failedNotified) if (now - t > 15 * 60 * 1000) failedNotified.delete(k);
+  }
+  notifyEvent('password_failed', share, { ip: req.ip, userAgent: req.headers['user-agent'] || '' }).catch(() => {});
 }
 
 function getActiveShare(id) {
@@ -122,6 +161,7 @@ router.get('/token-access/:id', (req, res) => {
     allow_download: share.allow_download === 1,
     allow_upload: share.allow_upload === 1,
     show_metadata: share.show_metadata === 1,
+    show_location: share.show_metadata === 1 && share.show_location === 1,
     upload_tag_ids: share.upload_tag_ids || null,
     sessionToken,
     verified: true,
@@ -138,7 +178,10 @@ router.post('/verify/:id', async (req, res) => {
   if (!share) return res.status(404).json({ error: 'Share not found or inactive' });
 
   const valid = await bcrypt.compare(password, share.password_hash);
-  if (!valid) return res.status(401).json({ error: 'Incorrect password' });
+  if (!valid) {
+    notifyPasswordFailed(share, req);
+    return res.status(401).json({ error: 'Incorrect password' });
+  }
   if (viewLimitReached(share)) return res.status(410).json({ error: 'This share has reached its view limit' });
 
   logAccess(share, req, 'view');
@@ -153,6 +196,7 @@ router.post('/verify/:id', async (req, res) => {
     allow_download: share.allow_download === 1,
     allow_upload: share.allow_upload === 1,
     show_metadata: share.show_metadata === 1,
+    show_location: share.show_metadata === 1 && share.show_location === 1,
     upload_tag_ids: share.upload_tag_ids || null,
     sessionToken,
     verified: true,
@@ -184,7 +228,7 @@ router.post('/content/:id', async (req, res) => {
       type: a.type,
       originalFileName: share.show_metadata ? a.originalFileName : undefined,
       fileCreatedAt: share.show_metadata ? a.fileCreatedAt : undefined,
-      exifInfo: share.show_metadata ? a.exifInfo : undefined,
+      exifInfo: share.show_metadata ? sanitizeExif(a.exifInfo, share.show_location === 1) : undefined,
       duration: a.duration,
       thumbnailUrl: `/api/proxy/thumbnail/${share.id}/${a.id}`,
       previewUrl:   `/api/proxy/preview/${share.id}/${a.id}`,

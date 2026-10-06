@@ -364,10 +364,90 @@ function UploadPanel({ shareId, sessionToken, onUploaded }) {
 }
 
 // ── Zooming Lightbox ──────────────────────────────────────────────────────────
+// ── Photo metadata helpers ───────────────────────────────────────────────────
+function formatBytes(n) {
+  if (!n) return null
+  const units = ['B', 'KB', 'MB', 'GB']
+  let i = 0
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++ }
+  return `${n.toFixed(i === 0 ? 0 : 1)} ${units[i]}`
+}
+
+function formatExposure(t) {
+  if (!t) return null
+  const n = Number(t)
+  if (!isFinite(n) || n <= 0) return `${t}s`
+  return n >= 1 ? `${n}s` : `1/${Math.round(1 / n)}s`
+}
+
+function getMetaRows(asset) {
+  const e = asset.exifInfo || {}
+  const rows = []
+  if (asset.originalFileName) rows.push(['File', asset.originalFileName])
+  const taken = e.dateTimeOriginal || asset.fileCreatedAt
+  if (taken) rows.push(['Taken', new Date(taken).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })])
+  if (e.exifImageWidth && e.exifImageHeight) {
+    const mp = (e.exifImageWidth * e.exifImageHeight) / 1e6
+    rows.push(['Size', `${e.exifImageWidth} × ${e.exifImageHeight}${mp >= 1 ? ` · ${mp.toFixed(1)} MP` : ''}`])
+  }
+  const bytes = formatBytes(e.fileSizeInByte)
+  if (bytes) rows.push(['File size', bytes])
+  const camera = [e.make, e.model].filter(Boolean).join(' ')
+  if (camera) rows.push(['Camera', camera])
+  if (e.lensModel) rows.push(['Lens', e.lensModel])
+  const exposure = [
+    e.fNumber ? `ƒ/${e.fNumber}` : null,
+    formatExposure(e.exposureTime),
+    e.iso ? `ISO ${e.iso}` : null,
+    e.focalLength ? `${e.focalLength} mm` : null,
+  ].filter(Boolean).join(' · ')
+  if (exposure) rows.push(['Exposure', exposure])
+  const place = [e.city, e.state, e.country].filter(Boolean).join(', ')
+  const hasCoords = typeof e.latitude === 'number' && typeof e.longitude === 'number'
+  if (place || hasCoords) {
+    rows.push(['Location', place || `${e.latitude.toFixed(4)}, ${e.longitude.toFixed(4)}`, hasCoords
+      ? `https://www.openstreetmap.org/?mlat=${e.latitude}&mlon=${e.longitude}#map=15/${e.latitude}/${e.longitude}`
+      : null])
+  }
+  return rows
+}
+
+function InfoPanel({ asset, onClose }) {
+  const rows = getMetaRows(asset)
+  return (
+    <div
+      onClick={e => e.stopPropagation()}
+      style={{
+        position: 'absolute', top: 60, right: 14, width: 'min(320px, calc(100vw - 28px))',
+        maxHeight: 'calc(100vh - 140px)', overflowY: 'auto', zIndex: 12,
+        background: 'rgba(16,19,32,0.94)', backdropFilter: 'blur(10px)',
+        border: '1px solid rgba(255,255,255,0.12)', borderRadius: 12, padding: '14px 16px',
+        color: 'rgba(255,255,255,0.85)', fontSize: '0.8rem', userSelect: 'text',
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+        <strong style={{ fontSize: '0.85rem' }}>Details</strong>
+        <button onClick={onClose} aria-label="Close details" style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.6)', cursor: 'pointer', fontSize: '1rem', lineHeight: 1 }}>×</button>
+      </div>
+      {rows.length === 0 && <div style={{ color: 'rgba(255,255,255,0.4)' }}>No metadata available.</div>}
+      {rows.map(([label, value, href]) => (
+        <div key={label} style={{ display: 'flex', gap: 12, padding: '5px 0', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+          <span style={{ width: 70, flexShrink: 0, color: 'rgba(255,255,255,0.4)' }}>{label}</span>
+          {href
+            ? <a href={href} target="_blank" rel="noopener noreferrer" style={{ color: '#c4a44a', wordBreak: 'break-word' }}>{value} ↗</a>
+            : <span style={{ wordBreak: 'break-word' }}>{value}</span>}
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function LightBox({ asset, token, onClose, onPrev, onNext, total, index }) {
   const [zoom, setZoom] = useState(1)
   const [pan, setPan] = useState({ x: 0, y: 0 })
   const [isDragging, setIsDragging] = useState(false)
+  const [showInfo, setShowInfo] = useState(false)
+  const hasInfo = getMetaRows(asset || {}).length > 0
   const dragStart = useRef(null)
   const lastPan = useRef({ x: 0, y: 0 })
   const imgRef = useRef(null)
@@ -387,6 +467,7 @@ function LightBox({ asset, token, onClose, onPrev, onNext, total, index }) {
 
   useEffect(() => {
     function onKey(e) {
+      if ((e.key === 'i' || e.key === 'I') && hasInfo) setShowInfo(v => !v)
       if (e.key === 'Escape') { if (zoom > 1) { setZoom(1); setPan({ x: 0, y: 0 }) } else onClose() }
       if (zoom <= 1) {
         if (e.key === 'ArrowLeft') onPrev()
@@ -399,7 +480,7 @@ function LightBox({ asset, token, onClose, onPrev, onNext, total, index }) {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onClose, onPrev, onNext, zoom])
+  }, [onClose, onPrev, onNext, zoom, hasInfo])
 
   // Wheel zoom (centered on cursor)
   function handleWheel(e) {
@@ -530,6 +611,16 @@ function LightBox({ asset, token, onClose, onPrev, onNext, total, index }) {
           )}
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
+          {hasInfo && (
+            <button
+              onClick={() => setShowInfo(v => !v)}
+              title="Photo details (i)"
+              style={{ background: showInfo ? 'rgba(196,164,74,0.2)' : 'rgba(255,255,255,0.08)', color: showInfo ? '#c4a44a' : 'rgba(255,255,255,0.8)', border: showInfo ? '1px solid rgba(196,164,74,0.4)' : '1px solid rgba(255,255,255,0.15)', borderRadius: 999, padding: '5px 14px', cursor: 'pointer', fontSize: '0.75rem', fontFamily: 'inherit', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+              Info
+            </button>
+          )}
           {asset.originalUrl && (
             <a href={`${asset.originalUrl}?t=${t}`} download className="btn btn-secondary btn-sm" style={{ color: 'rgba(255,255,255,0.8)', background: 'rgba(255,255,255,0.08)', borderColor: 'rgba(255,255,255,0.15)' }}>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
@@ -614,8 +705,10 @@ function LightBox({ asset, token, onClose, onPrev, onNext, total, index }) {
         </div>
       )}
 
+      {showInfo && hasInfo && <InfoPanel asset={asset} onClose={() => setShowInfo(false)} />}
+
       {/* Metadata footer */}
-      {(asset.originalFileName || asset.fileCreatedAt) && (
+      {!showInfo && (asset.originalFileName || asset.fileCreatedAt) && (
         <div style={{
           position: 'absolute', bottom: 0, left: 0, right: 0,
           padding: '14px 20px',

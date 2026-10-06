@@ -131,6 +131,30 @@ function initDb() {
     console.log('✅ shares.notify_email column added');
   }
 
+  // Show GPS / location in photo metadata (only applies when show_metadata is on)
+  if (!cols.includes('show_location')) {
+    db.exec(`ALTER TABLE shares ADD COLUMN show_location INTEGER DEFAULT 0`);
+    console.log('✅ shares.show_location column added');
+  }
+  // Timestamp of the last expiry reminder sent for the current expires_at
+  if (!cols.includes('expiry_reminded_at')) {
+    db.exec(`ALTER TABLE shares ADD COLUMN expiry_reminded_at DATETIME`);
+    console.log('✅ shares.expiry_reminded_at column added');
+  }
+  if (!cols.includes('expired_notified_at')) {
+    db.exec(`ALTER TABLE shares ADD COLUMN expired_notified_at DATETIME`);
+    // Don't announce shares that expired before this feature existed
+    db.exec(`UPDATE shares SET expired_notified_at = CURRENT_TIMESTAMP WHERE expires_at IS NOT NULL AND expires_at < datetime('now')`);
+    console.log('✅ shares.expired_notified_at column added');
+  }
+  // Set once the first-view notification has fired
+  if (!cols.includes('first_viewed_at')) {
+    db.exec(`ALTER TABLE shares ADD COLUMN first_viewed_at DATETIME`);
+    // Existing shares that already have views shouldn't fire a "first view" alert
+    db.exec(`UPDATE shares SET first_viewed_at = CURRENT_TIMESTAMP WHERE view_count > 0`);
+    console.log('✅ shares.first_viewed_at column added');
+  }
+
   // Share access logs
   db.exec(`
     CREATE TABLE IF NOT EXISTS access_logs (
@@ -220,6 +244,15 @@ function initDb() {
     // Cleanup settings
     cleanup_expired_shares: '0',
     cleanup_chunk_max_age_hours: '24',
+    // Notification triggers ('1' = on)
+    notify_admin_email: '',
+    notify_on_upload: '1',
+    notify_on_first_view: '0',
+    notify_on_view_limit: '0',
+    notify_on_password_failed: '0',
+    notify_on_expiry_reminder: '0',
+    notify_on_expired: '0',
+    expiry_reminder_hours: '48',
   };
 
   for (const [key, value] of Object.entries(defaults)) {

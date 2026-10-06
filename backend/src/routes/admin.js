@@ -42,6 +42,10 @@ router.put('/settings', async (req, res) => {
     'global_webhook_url', 'global_webhook_secret',
     // Cleanup
     'cleanup_expired_shares', 'cleanup_chunk_max_age_hours',
+    // Notification triggers
+    'notify_admin_email', 'notify_on_upload', 'notify_on_first_view', 'notify_on_view_limit',
+    'notify_on_password_failed', 'notify_on_expiry_reminder', 'notify_on_expired',
+    'expiry_reminder_hours',
   ];
 
   const update = db.prepare('INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)');

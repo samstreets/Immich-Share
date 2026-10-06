@@ -416,6 +416,16 @@ export default function SettingsPage() {
   const [webhookSaving, setWebhookSaving] = useState(false)
   const [webhookTesting, setWebhookTesting] = useState(false)
 
+  // Notification triggers
+  const NOTIFY_DEFAULTS = {
+    notify_admin_email: '', expiry_reminder_hours: '48',
+    notify_on_upload: '1', notify_on_first_view: '0', notify_on_view_limit: '0',
+    notify_on_password_failed: '0', notify_on_expiry_reminder: '0', notify_on_expired: '0',
+  }
+  const [notify, setNotify] = useState(NOTIFY_DEFAULTS)
+  const [notifyMsg, setNotifyMsg] = useState(null)
+  const [notifySaving, setNotifySaving] = useState(false)
+
   // Cleanup
   const [cleanupExpired, setCleanupExpired] = useState('0')
   const [chunkMaxAge, setChunkMaxAge] = useState('24')
@@ -441,6 +451,7 @@ export default function SettingsPage() {
         })
         setWebhookUrl(s.global_webhook_url || '')
         setWebhookSecret(s.global_webhook_secret || '')
+        setNotify(Object.fromEntries(Object.entries(NOTIFY_DEFAULTS).map(([k, d]) => [k, s[k] ?? d])))
         setCleanupExpired(s.cleanup_expired_shares || '0')
         setChunkMaxAge(s.cleanup_chunk_max_age_hours || '24')
       } catch (e) { console.error(e) }
@@ -536,6 +547,15 @@ export default function SettingsPage() {
       setWebhookMsg({ type: 'success', text: res.message })
     } catch (err) { setWebhookMsg({ type: 'error', text: err.message }) }
     finally { setWebhookTesting(false) }
+  }
+
+  async function saveNotify() {
+    setNotifySaving(true); setNotifyMsg(null)
+    try {
+      await api('/admin/settings', { method: 'PUT', body: notify })
+      setNotifyMsg({ type: 'success', text: 'Notification triggers saved.' })
+    } catch (err) { setNotifyMsg({ type: 'error', text: err.message }) }
+    finally { setNotifySaving(false) }
   }
 
   async function saveCleanup() {
@@ -721,6 +741,47 @@ export default function SettingsPage() {
                 {webhookTesting ? <span className="loading-spinner" style={{ width: 12, height: 12 }} /> : 'Send Test'}
               </button>
             </div>
+          </SectionCard>
+
+          {/* Notification triggers */}
+          <SectionCard icon={<WebhookIcon />} title="Notification Triggers" subtitle="Choose which events send an email or webhook" accent="var(--blue)">
+            <Msg msg={notifyMsg} />
+            <p style={{ fontSize: '0.76rem', color: 'var(--text-muted)', marginBottom: 14, lineHeight: 1.6 }}>
+              Alerts go to the share's notification email and webhook (set in the share editor), the admin email below, and the global webhook. Email needs SMTP configured above.
+            </p>
+            <div className="form-group">
+              <label>Admin notification email</label>
+              <input type="email" value={notify.notify_admin_email} onChange={e => setNotify(n => ({ ...n, notify_admin_email: e.target.value }))} placeholder="you@example.com" />
+              <span className="hint">Receives alerts for every share, in addition to any per-share email.</span>
+            </div>
+            {[
+              ['notify_on_upload', 'A file is uploaded'],
+              ['notify_on_first_view', 'A share is opened for the first time'],
+              ['notify_on_view_limit', 'A share reaches its view limit'],
+              ['notify_on_password_failed', 'A wrong password is entered (max 1 per IP per 15 min)'],
+              ['notify_on_expiry_reminder', 'A share is about to expire (reminder)'],
+              ['notify_on_expired', 'A share has expired'],
+            ].map(([key, label]) => (
+              <label key={key} style={{ display: 'flex', alignItems: 'center', gap: 9, cursor: 'pointer', fontSize: '0.875rem', fontWeight: 500, userSelect: 'none', marginBottom: 10 }}>
+                <div
+                  onClick={() => setNotify(n => ({ ...n, [key]: n[key] === '1' ? '0' : '1' }))}
+                  style={{ width: 32, height: 18, borderRadius: 999, background: notify[key] === '1' ? 'var(--accent)' : 'var(--bg4, var(--bg3))', border: notify[key] === '1' ? '1px solid var(--accent)' : '1px solid var(--border)', position: 'relative', cursor: 'pointer', transition: 'all 0.15s', flexShrink: 0 }}
+                >
+                  <div style={{ width: 12, height: 12, borderRadius: '50%', background: '#fff', position: 'absolute', top: 2, left: notify[key] === '1' ? 16 : 2, transition: 'left 0.15s' }} />
+                </div>
+                {label}
+              </label>
+            ))}
+            {notify.notify_on_expiry_reminder === '1' && (
+              <div className="form-group" style={{ marginTop: 6 }}>
+                <label>Send expiry reminder this many hours before</label>
+                <input type="number" min="1" max="720" value={notify.expiry_reminder_hours} onChange={e => setNotify(n => ({ ...n, expiry_reminder_hours: e.target.value }))} style={{ width: 100 }} />
+                <span className="hint">Checked every cleanup run (30 min). Default: 48h.</span>
+              </div>
+            )}
+            <button type="button" className="btn btn-primary btn-sm" onClick={saveNotify} disabled={notifySaving} style={{ marginTop: 6 }}>
+              {notifySaving ? <span className="loading-spinner" /> : 'Save'}
+            </button>
           </SectionCard>
 
           {/* Cleanup */}
