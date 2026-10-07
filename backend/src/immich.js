@@ -45,14 +45,16 @@ async function getAlbum(albumId) {
 // Immich v3 removed the `assets` property from AlbumResponseDto (GET /albums/:id).
 // Fetch an album's assets via POST /search/metadata with an albumIds filter instead,
 // paginating through all pages since results are capped per page.
-async function getAlbumAssets(albumId) {
+// Pass { withExif: true } to include exifInfo (camera, GPS, ...) — Immich omits
+// it from search results otherwise.
+async function getAlbumAssets(albumId, { withExif = false } = {}) {
   const items = [];
   let page = 1;
   // Safety cap so a misbehaving server can't loop forever.
   for (let i = 0; i < 1000; i++) {
     const result = await immichRequest('/search/metadata', {
       method: 'POST',
-      body: JSON.stringify({ albumIds: [albumId], size: 1000, page }),
+      body: JSON.stringify({ albumIds: [albumId], size: 1000, page, ...(withExif ? { withExif: true } : {}) }),
     });
     const batch = result?.assets?.items || [];
     items.push(...batch);
@@ -91,9 +93,9 @@ async function tagAssets(tagId, assetIds) {
 }
 
 // Assets for a tag via search
-async function getAssetsByTag(tagId) {
+async function getAssetsByTag(tagId, { withExif = false } = {}) {
   // Immich search endpoint with tag filter
-  const body = { tagIds: [tagId], size: 1000, page: 1 };
+  const body = { tagIds: [tagId], size: 1000, page: 1, ...(withExif ? { withExif: true } : {}) };
   const result = await immichRequest('/search/metadata', {
     method: 'POST',
     body: JSON.stringify(body),

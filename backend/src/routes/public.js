@@ -218,9 +218,9 @@ router.post('/content/:id', async (req, res) => {
   try {
     let assets = [];
     if (share.share_type === 'album') {
-      assets = await getAlbumAssets(share.immich_album_id);
+      assets = await getAlbumAssets(share.immich_album_id, { withExif: share.show_metadata === 1 });
     } else if (share.share_type === 'tag') {
-      assets = await getAssetsByTag(share.immich_tag_id);
+      assets = await getAssetsByTag(share.immich_tag_id, { withExif: share.show_metadata === 1 });
     }
 
     const sanitized = assets.map(a => ({
