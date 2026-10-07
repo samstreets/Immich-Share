@@ -249,53 +249,12 @@ async function uploadFileChunked(file, shareId, sessionToken, onProgress) {
   return { success: true, assetId: assembleData.assetId }
 }
 
-// Returns true/false if a JPEG has GPS coordinates in its EXIF, or null when it
-// can't tell (non-JPEG, unreadable). Used to warn before uploading a photo whose
-// location was already stripped by the phone's photo picker.
-async function jpegHasGps(file) {
-  try {
-    if (!/\.jpe?g$/i.test(file.name) && file.type !== 'image/jpeg') return null
-    const buf = await file.slice(0, 256 * 1024).arrayBuffer()
-    const v = new DataView(buf)
-    if (v.getUint16(0) !== 0xffd8) return null
-    let off = 2
-    while (off + 4 < v.byteLength) {
-      if (v.getUint8(off) !== 0xff) return null
-      const marker = v.getUint8(off + 1)
-      const len = v.getUint16(off + 2)
-      if (marker === 0xe1 && v.getUint32(off + 4) === 0x45786966) { // "Exif"
-        const tiff = off + 10
-        const little = v.getUint16(tiff) === 0x4949
-        const u16 = o => v.getUint16(o, little)
-        const u32 = o => v.getUint32(o, little)
-        const ifd0 = tiff + u32(tiff + 4)
-        const count = u16(ifd0)
-        for (let i = 0; i < count; i++) {
-          const entry = ifd0 + 2 + i * 12
-          if (u16(entry) === 0x8825) { // GPSInfo pointer
-            const gps = tiff + u32(entry + 8)
-            if (gps + 2 > v.byteLength) return null
-            const gpsCount = u16(gps)
-            for (let j = 0; j < gpsCount; j++) if (u16(gps + 2 + j * 12) === 0x0002) return true // GPSLatitude
-            return false
-          }
-        }
-        return false
-      }
-      if (marker === 0xda) return false // start of scan: no EXIF seen
-      off += 2 + len
-    }
-    return null
-  } catch { return null }
-}
-
 function UploadPanel({ shareId, sessionToken, onUploaded }) {
   const [files, setFiles] = useState([])
   const [uploading, setUploading] = useState(false)
   const [progress, setProgress] = useState({})
   const [results, setResults] = useState([])
   const [dragOver, setDragOver] = useState(false)
-  const [gpsInfo, setGpsInfo] = useState({}) // name+size -> true | false | null
   const inputRef = useRef()
   const filesInputRef = useRef()
 
@@ -310,10 +269,6 @@ function UploadPanel({ shareId, sessionToken, onUploaded }) {
       return [...prev, ...arr.filter(f => !existing.has(f.name + f.size))]
     })
     setResults([])
-    arr.forEach(async f => {
-      const has = await jpegHasGps(f)
-      setGpsInfo(prev => ({ ...prev, [f.name + f.size]: has }))
-    })
   }
 
   function removeFile(idx) { setFiles(prev => prev.filter((_, i) => i !== idx)) }
@@ -373,12 +328,6 @@ function UploadPanel({ shareId, sessionToken, onUploaded }) {
                 <div key={i} style={{ padding: '6px 10px', background: 'rgba(255,255,255,0.05)', borderRadius: 6, border: '1px solid rgba(255,255,255,0.08)', fontSize: '0.8rem' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'rgba(255,255,255,0.8)' }}>{f.type.startsWith('video/') ? '🎬 ' : '📷 '}{f.name}</span>
-                    {gpsInfo[f.name + f.size] === false && (
-                      <span title="This photo has no location data. Your phone's photo picker probably removed it — use “Upload as files (keep location)” to keep it." style={{ fontSize: '0.68rem', color: '#e0a84a', whiteSpace: 'nowrap' }}>⚠ no location</span>
-                    )}
-                    {gpsInfo[f.name + f.size] === true && (
-                      <span style={{ fontSize: '0.68rem', color: '#6fbf8a', whiteSpace: 'nowrap' }}>📍 location</span>
-                    )}
                     <span style={{ color: 'rgba(255,255,255,0.3)', flexShrink: 0, fontSize: '0.72rem' }}>{(f.size / 1024 / 1024).toFixed(1)} MB{f.size > CHUNK_SIZE && <span style={{ marginLeft: 4, color: 'rgba(196,164,74,0.6)', fontSize: '0.68rem' }}>({Math.ceil(f.size / CHUNK_SIZE)} chunks)</span>}</span>
                     {!uploading && <button onClick={e => { e.stopPropagation(); removeFile(i) }} style={{ background: 'none', color: 'rgba(255,255,255,0.3)', fontSize: '0.9rem', padding: '0 2px', border: 'none', cursor: 'pointer', lineHeight: 1, flexShrink: 0 }}>✕</button>}
                     {isDone && <span style={{ color: '#4ade80', fontSize: '0.8rem', flexShrink: 0 }}>✓</span>}
