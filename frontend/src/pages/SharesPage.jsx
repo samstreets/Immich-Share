@@ -362,6 +362,8 @@ function InlineCreate({ type, onCreate, onCancel }) {
 // ── Tag multi-picker (for upload tags) ────────────────────────────────────────
 function TagPicker({ tags, selectedIds, onChange, onRefresh }) {
   const [creating, setCreating] = useState(false)
+  const [open, setOpen] = useState(false)
+  const [search, setSearch] = useState('')
 
   function toggle(id) {
     const next = selectedIds.includes(id)
@@ -376,34 +378,80 @@ function TagPicker({ tags, selectedIds, onChange, onRefresh }) {
     onChange([...selectedIds, tag.id])
   }
 
+  const tagLabel = tag => tag.value ?? tag.name ?? tag.id
+  const selectedTags = tags.filter(t => selectedIds.includes(t.id))
+  const q = search.trim().toLowerCase()
+  const visibleTags = q ? tags.filter(t => String(tagLabel(t)).toLowerCase().includes(q)) : tags
+
   return (
     <div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: creating ? 0 : 8 }}>
-        {tags.length === 0
-          ? <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>No tags in Immich yet.</span>
-          : tags.map(tag => {
-              const id = tag.id
-              const label = tag.value ?? tag.name ?? id
-              const active = selectedIds.includes(id)
-              return (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => toggle(id)}
-                  style={{
-                    padding: '3px 11px', borderRadius: 999, fontSize: '0.75rem', fontWeight: 600,
-                    background: active ? 'var(--accent)' : 'var(--bg3)',
-                    color: active ? '#0d0a00' : 'var(--text-muted)',
-                    border: active ? '1px solid var(--accent)' : '1px solid var(--border)',
-                    cursor: 'pointer', fontFamily: 'inherit', transition: 'all 0.12s',
-                  }}
-                >
-                  {active && '✓ '}{label}
-                </button>
-              )
-            })
-        }
-      </div>
+      {selectedTags.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+          {selectedTags.map(tag => (
+            <button
+              key={tag.id}
+              type="button"
+              onClick={() => toggle(tag.id)}
+              title="Remove"
+              style={{
+                padding: '3px 11px', borderRadius: 999, fontSize: '0.75rem', fontWeight: 600,
+                background: 'var(--accent)', color: '#0d0a00', border: '1px solid var(--accent)',
+                cursor: 'pointer', fontFamily: 'inherit',
+              }}
+            >
+              {tagLabel(tag)} ✕
+            </button>
+          ))}
+        </div>
+      )}
+
+      {tags.length === 0 ? (
+        <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>No tags in Immich yet.</span>
+      ) : (
+        <div style={{ marginBottom: 8 }}>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={() => setOpen(v => !v)}
+            style={{ width: '100%', justifyContent: 'space-between' }}
+          >
+            <span>{selectedIds.length ? `${selectedIds.length} selected — add more…` : 'Select tags…'}</span>
+            <span>{open ? '▲' : '▼'}</span>
+          </button>
+          {open && (
+            <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', background: 'var(--bg2, var(--bg3))', marginTop: 4 }}>
+              <input
+                type="text"
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                placeholder="Search tags…"
+                style={{ width: '100%', boxSizing: 'border-box', border: 'none', borderBottom: '1px solid var(--border)', borderRadius: 0 }}
+              />
+              <div style={{ maxHeight: 180, overflowY: 'auto' }}>
+                {visibleTags.length === 0
+                  ? <div style={{ padding: '8px 12px', fontSize: '0.75rem', color: 'var(--text-dim)' }}>No matching tags.</div>
+                  : visibleTags.map(tag => {
+                      const active = selectedIds.includes(tag.id)
+                      return (
+                        <label
+                          key={tag.id}
+                          style={{
+                            display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px',
+                            fontSize: '0.8rem', cursor: 'pointer', margin: 0,
+                            color: active ? 'var(--accent)' : 'var(--text-muted)',
+                          }}
+                        >
+                          <input type="checkbox" checked={active} onChange={() => toggle(tag.id)} style={{ width: 'auto', margin: 0 }} />
+                          {tagLabel(tag)}
+                        </label>
+                      )
+                    })
+                }
+              </div>
+            </div>
+          )}
+        </div>
+      )}
       {creating ? (
         <InlineCreate
           type="tag"
