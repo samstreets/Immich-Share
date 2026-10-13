@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom'
+import { canShareToPhotos, fetchAssetFiles, shareFiles } from '../utils/saveToPhotos'
 
 async function safeFetch(url, options = {}) {
   const res = await fetch(url, options)
@@ -95,13 +96,16 @@ function PasswordGate({ shareInfo, onUnlock, dark }) {
   )
 }
 
-function DownloadZipButton({ shareId, sessionToken, assetCount, shareName, selectedIds = null, singleAssetId = null }) {
+function DownloadZipButton({ shareId, sessionToken, assetCount, shareName, selectedIds = null, singleAssetId = null, allAssetIds = [] }) {
   const [state, setState] = useState('idle')
   const [progress, setProgress] = useState(0)
   const [received, setReceived] = useState(0)
   const [total, setTotal] = useState(0)
   const [errorMsg, setErrorMsg] = useState('')
   const abortRef = useRef(null)
+  const [readyFiles, setReadyFiles] = useState(null)
+  // On phones, save straight to Photos/gallery via the native share sheet instead of a ZIP
+  const photosMode = useMemo(() => canShareToPhotos(), [])
 
   const count = selectedIds ? selectedIds.length : assetCount
   const label = selectedIds ? `Download Selected (${count})` : `Download All (${count})`
@@ -113,6 +117,7 @@ function DownloadZipButton({ shareId, sessionToken, assetCount, shareName, selec
   }
 
   async function handleDownload() {
+    if (photosMode) return handleSaveToPhotos()
     // A single asset is downloaded as the raw file, not wrapped in a ZIP
     if (singleAssetId && state !== 'downloading') {
       const a = document.createElement('a')
@@ -172,7 +177,44 @@ function DownloadZipButton({ shareId, sessionToken, assetCount, shareName, selec
     }
   }
 
+  async function handleSaveToPhotos() {
+    if (state === 'downloading') {
+      abortRef.current?.abort()
+      setState('idle'); setProgress(0); setReceived(0); setTotal(0)
+      return
+    }
+    try {
+      // Second tap: files are already fetched, so the share sheet still has a fresh user gesture
+      if (readyFiles) {
+        const files = readyFiles
+        setReadyFiles(null)
+        if (await shareFiles(files)) { setState('done'); setTimeout(() => setState('idle'), 3000) } else setState('idle')
+        return
+      }
+      const ids = selectedIds || allAssetIds
+      if (!ids.length) return
+      setState('downloading'); setProgress(0); setReceived(0); setTotal(0); setErrorMsg('')
+      const controller = new AbortController()
+      abortRef.current = controller
+      const files = await fetchAssetFiles(shareId, sessionToken, ids, {
+        signal: controller.signal,
+        onProgress: (done, all) => { setTotal(all); setReceived(done); setProgress(Math.round((done / all) * 100)) },
+      })
+      // The tap that started the fetch may have expired; try, and fall back to a "Save" tap
+      try {
+        if (await shareFiles(files)) { setState('done'); setTimeout(() => setState('idle'), 3000) } else setState('idle')
+      } catch {
+        setReadyFiles(files); setState('ready')
+      }
+    } catch (err) {
+      if (err.name === 'AbortError') return
+      setErrorMsg(err.message); setState('error')
+      setTimeout(() => { setState('idle'); setProgress(0) }, 4000)
+    }
+  }
+
   const isDownloading = state === 'downloading'
+  const isReady = state === 'ready'
   const isDone = state === 'done'
   const isError = state === 'error'
   const btnBg = isError ? 'rgba(248,113,113,0.15)' : isDone ? 'rgba(74,222,128,0.15)' : isDownloading ? 'rgba(196,164,74,0.2)' : 'rgba(255,255,255,0.1)'
@@ -187,8 +229,8 @@ function DownloadZipButton({ shareId, sessionToken, assetCount, shareName, selec
       >
         {isDownloading ? (
           <><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>Cancel</>
-        ) : isDone ? <>✓ Downloaded!</> : isError ? <>✗ {errorMsg.slice(0, 28)}{errorMsg.length > 28 ? '…' : ''}</> : (
-          <><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>{label}</>
+        ) : isReady ? <>Tap to save to Photos</> : isDone ? <>{photosMode ? '✓ Saved!' : '✓ Downloaded!'}</> : isError ? <>✗ {errorMsg.slice(0, 28)}{errorMsg.length > 28 ? '…' : ''}</> : (
+          <><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>{photosMode ? label.replace('Download', 'Save') : label}</>
         )}
       </button>
       {isDownloading && (
@@ -197,7 +239,7 @@ function DownloadZipButton({ shareId, sessionToken, assetCount, shareName, selec
             <div style={{ height: '100%', width: total > 0 ? `${progress}%` : undefined, background: 'linear-gradient(90deg, #c4a44a, #f5cc6c)', borderRadius: 2, transition: total > 0 ? 'width 0.3s ease' : undefined, animation: total === 0 ? 'zipPulse 1.4s ease-in-out infinite' : undefined }} />
           </div>
           <div style={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.4)', marginTop: 3, textAlign: 'right', fontWeight: 600 }}>
-            {total > 0 ? `${formatBytes(received)} / ${formatBytes(total)} · ${progress}%` : `${formatBytes(received)} received…`}
+            {photosMode ? `Preparing ${received} / ${total}…` : total > 0 ? `${formatBytes(received)} / ${formatBytes(total)} · ${progress}%` : `${formatBytes(received)} received…`}
           </div>
         </div>
       )}
@@ -566,6 +608,22 @@ function LightBox({ asset, token, onClose, onPrev, onNext, total, index }) {
   const t = encodeURIComponent(token)
   const isVideo = asset.type === 'VIDEO'
   const isZoomed = zoom > 1
+  const photosMode = useMemo(() => canShareToPhotos(), [])
+  const [saving, setSaving] = useState(false)
+
+  // Hand the original to the native share sheet so it can be saved to Photos/gallery
+  async function saveToPhotos() {
+    setSaving(true)
+    try {
+      const [, shareId, assetId] = asset.originalUrl.match(/\/original\/([^/]+)\/([^/?]+)/) || []
+      const files = await fetchAssetFiles(shareId, token, [assetId])
+      await shareFiles(files)
+    } catch (err) {
+      if (err.name !== 'AbortError') window.alert('Could not save: ' + err.message)
+    } finally {
+      setSaving(false)
+    }
+  }
 
   return (
     <div
@@ -628,7 +686,12 @@ function LightBox({ asset, token, onClose, onPrev, onNext, total, index }) {
               Info
             </button>
           )}
-          {asset.originalUrl && (
+          {asset.originalUrl && photosMode && (
+            <button onClick={saveToPhotos} disabled={saving} className="btn btn-secondary btn-sm" style={{ color: 'rgba(255,255,255,0.8)', background: 'rgba(255,255,255,0.08)', borderColor: 'rgba(255,255,255,0.15)' }}>
+              {saving ? 'Preparing…' : 'Save to Photos'}
+            </button>
+          )}
+          {asset.originalUrl && !photosMode && (
             <a href={`${asset.originalUrl}?t=${t}`} download className="btn btn-secondary btn-sm" style={{ color: 'rgba(255,255,255,0.8)', background: 'rgba(255,255,255,0.08)', borderColor: 'rgba(255,255,255,0.15)' }}>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
               Download
@@ -1243,10 +1306,11 @@ export default function ShareView() {
               shareName={shareData.name}
               selectedIds={selectedIdsArray}
               singleAssetId={selectedIdsArray.length === 1 ? selectedIdsArray[0] : null}
+              allAssetIds={selectedIdsArray}
             />
           )}
           {shareData.allow_download && assets.length > 0 && selectedIds.size === 0 && (
-            <DownloadZipButton shareId={shareData.id} sessionToken={token} assetCount={assets.length} shareName={shareData.name} singleAssetId={assets.length === 1 ? assets[0].id : null} />
+            <DownloadZipButton shareId={shareData.id} sessionToken={token} assetCount={assets.length} shareName={shareData.name} singleAssetId={assets.length === 1 ? assets[0].id : null} allAssetIds={assets.map(a => a.id)} />
           )}
           {shareData.allow_upload && (
             <button onClick={() => setShowUpload(v => !v)} style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '6px 12px', borderRadius: 999, fontSize: '0.78rem', fontWeight: 600, background: showUpload ? 'rgba(196,164,74,0.2)' : 'rgba(255,255,255,0.1)', color: showUpload ? '#c4a44a' : textMuted, border: showUpload ? '1px solid rgba(196,164,74,0.4)' : `1px solid ${borderColor}`, cursor: 'pointer', fontFamily: 'inherit', transition: 'all 0.15s' }}>
