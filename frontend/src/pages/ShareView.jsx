@@ -95,7 +95,7 @@ function PasswordGate({ shareInfo, onUnlock, dark }) {
   )
 }
 
-function DownloadZipButton({ shareId, sessionToken, assetCount, shareName, selectedIds = null }) {
+function DownloadZipButton({ shareId, sessionToken, assetCount, shareName, selectedIds = null, singleAssetId = null }) {
   const [state, setState] = useState('idle')
   const [progress, setProgress] = useState(0)
   const [received, setReceived] = useState(0)
@@ -113,6 +113,14 @@ function DownloadZipButton({ shareId, sessionToken, assetCount, shareName, selec
   }
 
   async function handleDownload() {
+    // A single asset is downloaded as the raw file, not wrapped in a ZIP
+    if (singleAssetId && state !== 'downloading') {
+      const a = document.createElement('a')
+      a.href = `/api/proxy/original/${shareId}/${encodeURIComponent(singleAssetId)}?t=${encodeURIComponent(sessionToken)}`
+      a.download = ''
+      document.body.appendChild(a); a.click(); document.body.removeChild(a)
+      return
+    }
     if (state === 'downloading') {
       abortRef.current?.abort()
       setState('idle'); setProgress(0); setReceived(0); setTotal(0)
@@ -1234,10 +1242,11 @@ export default function ShareView() {
               assetCount={selectedIds.size}
               shareName={shareData.name}
               selectedIds={selectedIdsArray}
+              singleAssetId={selectedIdsArray.length === 1 ? selectedIdsArray[0] : null}
             />
           )}
           {shareData.allow_download && assets.length > 0 && selectedIds.size === 0 && (
-            <DownloadZipButton shareId={shareData.id} sessionToken={token} assetCount={assets.length} shareName={shareData.name} />
+            <DownloadZipButton shareId={shareData.id} sessionToken={token} assetCount={assets.length} shareName={shareData.name} singleAssetId={assets.length === 1 ? assets[0].id : null} />
           )}
           {shareData.allow_upload && (
             <button onClick={() => setShowUpload(v => !v)} style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '6px 12px', borderRadius: 999, fontSize: '0.78rem', fontWeight: 600, background: showUpload ? 'rgba(196,164,74,0.2)' : 'rgba(255,255,255,0.1)', color: showUpload ? '#c4a44a' : textMuted, border: showUpload ? '1px solid rgba(196,164,74,0.4)' : `1px solid ${borderColor}`, cursor: 'pointer', fontFamily: 'inherit', transition: 'all 0.15s' }}>
