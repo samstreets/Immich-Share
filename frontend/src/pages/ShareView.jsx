@@ -105,7 +105,8 @@ function DownloadZipButton({ shareId, sessionToken, assetCount, shareName, selec
   const abortRef = useRef(null)
   const [readyFiles, setReadyFiles] = useState(null)
   // On phones, save straight to Photos/gallery via the native share sheet instead of a ZIP
-  const photosMode = useMemo(() => canShareToPhotos(), [])
+  // (only practical for small batches: every file is held in memory)
+  const photosMode = useMemo(() => canShareToPhotos() && (selectedIds ? selectedIds.length : assetCount) <= 50, [selectedIds, assetCount])
 
   const count = selectedIds ? selectedIds.length : assetCount
   const label = selectedIds ? `Download Selected (${count})` : `Download All (${count})`
@@ -132,49 +133,19 @@ function DownloadZipButton({ shareId, sessionToken, assetCount, shareName, selec
       return
     }
 
-    setState('downloading'); setProgress(0); setReceived(0); setTotal(0); setErrorMsg('')
-    const controller = new AbortController()
-    abortRef.current = controller
-
-    try {
-      const t = encodeURIComponent(sessionToken)
-      let url = `/api/public/zip/${shareId}?t=${t}`
-      if (selectedIds && selectedIds.length > 0) {
-        url += `&ids=${encodeURIComponent(selectedIds.join(','))}`
-      }
-      const res = await fetch(url, { signal: controller.signal })
-      if (!res.ok) { const text = await res.text(); throw new Error(text || `HTTP ${res.status}`) }
-
-      const contentLength = parseInt(res.headers.get('content-length') || '0', 10)
-      setTotal(contentLength)
-      const reader = res.body.getReader()
-      const chunks = []
-      let loaded = 0
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        chunks.push(value); loaded += value.length; setReceived(loaded)
-        if (contentLength > 0) setProgress(Math.min(Math.round((loaded / contentLength) * 100), 99))
-        else setProgress(prev => (prev >= 95 ? 10 : prev + 1))
-      }
-
-      setProgress(100)
-      const blob = new Blob(chunks, { type: 'application/zip' })
-      const blobUrl = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = blobUrl
-      const safe = (shareName || 'share').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 60)
-      a.download = selectedIds ? `${safe}_selection.zip` : `${safe}.zip`
-      document.body.appendChild(a); a.click(); document.body.removeChild(a)
-      URL.revokeObjectURL(blobUrl)
-      setState('done')
-      setTimeout(() => { setState('idle'); setProgress(0); setReceived(0); setTotal(0) }, 3000)
-    } catch (err) {
-      if (err.name === 'AbortError') return
-      setErrorMsg(err.message); setState('error')
-      setTimeout(() => { setState('idle'); setProgress(0) }, 4000)
+    // Let the browser stream the ZIP straight to disk. Buffering a multi-GB archive
+    // in a JS Blob exhausts memory and the download never finishes.
+    const t = encodeURIComponent(sessionToken)
+    let url = `/api/public/zip/${shareId}?t=${t}`
+    if (selectedIds && selectedIds.length > 0) {
+      url += `&ids=${encodeURIComponent(selectedIds.join(','))}`
     }
+    const a = document.createElement('a')
+    a.href = url
+    a.download = ''
+    document.body.appendChild(a); a.click(); document.body.removeChild(a)
+    setState('done')
+    setTimeout(() => setState('idle'), 3000)
   }
 
   async function handleSaveToPhotos() {
@@ -229,7 +200,7 @@ function DownloadZipButton({ shareId, sessionToken, assetCount, shareName, selec
       >
         {isDownloading ? (
           <><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>Cancel</>
-        ) : isReady ? <>Tap to save to Photos</> : isDone ? <>{photosMode ? '✓ Saved!' : '✓ Downloaded!'}</> : isError ? <>✗ {errorMsg.slice(0, 28)}{errorMsg.length > 28 ? '…' : ''}</> : (
+        ) : isReady ? <>Tap to save to Photos</> : isDone ? <>{photosMode ? '✓ Saved!' : '✓ Download started'}</> : isError ? <>✗ {errorMsg.slice(0, 28)}{errorMsg.length > 28 ? '…' : ''}</> : (
           <><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>{photosMode ? label.replace('Download', 'Save') : label}</>
         )}
       </button>
@@ -608,7 +579,8 @@ function LightBox({ asset, token, onClose, onPrev, onNext, total, index }) {
   const t = encodeURIComponent(token)
   const isVideo = asset.type === 'VIDEO'
   const isZoomed = zoom > 1
-  const photosMode = useMemo(() => canShareToPhotos(), [])
+  // (only practical for small batches: every file is held in memory)
+  const photosMode = useMemo(() => canShareToPhotos() && (selectedIds ? selectedIds.length : assetCount) <= 50, [selectedIds, assetCount])
   const [saving, setSaving] = useState(false)
 
   // Hand the original to the native share sheet so it can be saved to Photos/gallery
