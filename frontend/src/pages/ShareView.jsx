@@ -133,19 +133,37 @@ function DownloadZipButton({ shareId, sessionToken, assetCount, shareName, selec
       return
     }
 
-    // Let the browser stream the ZIP straight to disk. Buffering a multi-GB archive
-    // in a JS Blob exhausts memory and the download never finishes.
-    const t = encodeURIComponent(sessionToken)
-    let url = `/api/public/zip/${shareId}?t=${t}`
-    if (selectedIds && selectedIds.length > 0) {
-      url += `&ids=${encodeURIComponent(selectedIds.join(','))}`
+    // Large shares are split into several ZIPs of a few GB each. Each part is handed to the
+    // browser as a normal download so it streams to disk instead of being buffered in memory.
+    setState('downloading'); setProgress(0); setReceived(0); setTotal(0); setErrorMsg('')
+    const controller = new AbortController()
+    abortRef.current = controller
+    try {
+      const t = encodeURIComponent(sessionToken)
+      const ids = selectedIds && selectedIds.length > 0 ? `&ids=${encodeURIComponent(selectedIds.join(','))}` : ''
+      const planRes = await fetch(`/api/public/zip-plan/${shareId}?t=${t}${ids}`, { signal: controller.signal })
+      if (!planRes.ok) { const text = await planRes.text(); throw new Error(text || `HTTP ${planRes.status}`) }
+      const { parts } = await planRes.json()
+      if (!parts.length) throw new Error('No files to download')
+
+      setTotal(parts.length)
+      for (let i = 0; i < parts.length; i++) {
+        if (controller.signal.aborted) return
+        setReceived(i + 1); setProgress(Math.round(((i + 1) / parts.length) * 100))
+        const a = document.createElement('a')
+        a.href = `/api/public/zip/${shareId}?t=${t}${ids}&part=${parts[i].part}`
+        a.download = ''
+        document.body.appendChild(a); a.click(); document.body.removeChild(a)
+        // Space the downloads out so browsers don't drop the later ones
+        if (i < parts.length - 1) await new Promise(r => setTimeout(r, 1500))
+      }
+      setState('done')
+      setTimeout(() => { setState('idle'); setProgress(0); setReceived(0); setTotal(0) }, 3000)
+    } catch (err) {
+      if (err.name === 'AbortError') return
+      setErrorMsg(err.message); setState('error')
+      setTimeout(() => { setState('idle'); setProgress(0) }, 4000)
     }
-    const a = document.createElement('a')
-    a.href = url
-    a.download = ''
-    document.body.appendChild(a); a.click(); document.body.removeChild(a)
-    setState('done')
-    setTimeout(() => setState('idle'), 3000)
   }
 
   async function handleSaveToPhotos() {
@@ -200,7 +218,7 @@ function DownloadZipButton({ shareId, sessionToken, assetCount, shareName, selec
       >
         {isDownloading ? (
           <><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>Cancel</>
-        ) : isReady ? <>Tap to save to Photos</> : isDone ? <>{photosMode ? '✓ Saved!' : '✓ Download started'}</> : isError ? <>✗ {errorMsg.slice(0, 28)}{errorMsg.length > 28 ? '…' : ''}</> : (
+        ) : isReady ? <>Tap to save to Photos</> : isDone ? <>{photosMode ? '✓ Saved!' : total > 1 ? `✓ ${total} ZIPs started` : '✓ Download started'}</> : isError ? <>✗ {errorMsg.slice(0, 28)}{errorMsg.length > 28 ? '…' : ''}</> : (
           <><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>{photosMode ? label.replace('Download', 'Save') : label}</>
         )}
       </button>
@@ -210,7 +228,7 @@ function DownloadZipButton({ shareId, sessionToken, assetCount, shareName, selec
             <div style={{ height: '100%', width: total > 0 ? `${progress}%` : undefined, background: 'linear-gradient(90deg, #c4a44a, #f5cc6c)', borderRadius: 2, transition: total > 0 ? 'width 0.3s ease' : undefined, animation: total === 0 ? 'zipPulse 1.4s ease-in-out infinite' : undefined }} />
           </div>
           <div style={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.4)', marginTop: 3, textAlign: 'right', fontWeight: 600 }}>
-            {photosMode ? `Preparing ${received} / ${total}…` : total > 0 ? `${formatBytes(received)} / ${formatBytes(total)} · ${progress}%` : `${formatBytes(received)} received…`}
+            {photosMode ? `Preparing ${received} / ${total}…` : total > 0 ? `Starting ZIP ${received} of ${total}…` : 'Preparing…'}
           </div>
         </div>
       )}

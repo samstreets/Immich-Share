@@ -242,34 +242,78 @@ router.post('/content/:id', async (req, res) => {
   }
 });
 
-// ── Download all as ZIP ───────────────────────────────────────────────────────
-router.get('/zip/:id', async (req, res) => {
-  const sessionToken = req.query.t;
-  if (!sessionToken) return res.status(400).send('Session token required');
+// ── Download as ZIP (split into parts) ────────────────────────────────────────
+const ZIP_PART_MAX_BYTES = 2 * 1024 * 1024 * 1024; // ~2 GB per ZIP
+const ZIP_PART_MAX_FILES = 500;
+const UNKNOWN_SIZE_GUESS = 20 * 1024 * 1024;
 
-  const share = getActiveShare(req.params.id);
-  if (!share) return res.status(404).send('Share not found');
-  if (!share.allow_download) return res.status(403).send('Downloads not allowed for this share');
-
-  if (!verifyToken(share.id, sessionToken)) {
-    return res.status(401).send('Invalid or expired session');
+// Resolve the assets for a zip request (optionally filtered by ?ids=) in a stable order.
+async function loadZipAssets(share, idsParam) {
+  let assets = [];
+  if (share.share_type === 'album') {
+    assets = await getAlbumAssets(share.immich_album_id, { withExif: true });
+  } else if (share.share_type === 'tag') {
+    assets = await getAssetsByTag(share.immich_tag_id);
   }
+  if (idsParam) {
+    const allowed = new Set(
+      idsParam.split(',').map(s => s.trim()).filter(s => UUID_RE.test(s))
+    );
+    assets = assets.filter(a => allowed.has(a.id));
+  }
+  return assets;
+}
+
+// Greedily group assets into parts bounded by size and file count.
+// Each entry keeps its index in the full list so filenames stay unique across parts.
+function planZipParts(assets) {
+  const parts = [];
+  let cur = null;
+  assets.forEach((asset, index) => {
+    const size = Number(asset.exifInfo?.fileSizeInByte) || UNKNOWN_SIZE_GUESS;
+    if (!cur || cur.items.length >= ZIP_PART_MAX_FILES || (cur.bytes + size > ZIP_PART_MAX_BYTES && cur.items.length > 0)) {
+      cur = { items: [], bytes: 0 };
+      parts.push(cur);
+    }
+    cur.items.push({ asset, index });
+    cur.bytes += size;
+  });
+  return parts;
+}
+
+function authZipRequest(req, res) {
+  const sessionToken = req.query.t;
+  if (!sessionToken) { res.status(400).send('Session token required'); return null; }
+  const share = getActiveShare(req.params.id);
+  if (!share) { res.status(404).send('Share not found'); return null; }
+  if (!share.allow_download) { res.status(403).send('Downloads not allowed for this share'); return null; }
+  if (!verifyToken(share.id, sessionToken)) { res.status(401).send('Invalid or expired session'); return null; }
+  return share;
+}
+
+router.get('/zip-plan/:id', async (req, res) => {
+  const share = authZipRequest(req, res);
+  if (!share) return;
+  try {
+    const parts = planZipParts(await loadZipAssets(share, req.query.ids));
+    res.json({ parts: parts.map((p, i) => ({ part: i + 1, count: p.items.length, bytes: p.bytes })) });
+  } catch (err) {
+    res.status(502).send(`Failed to plan download: ${err.message}`);
+  }
+});
+
+router.get('/zip/:id', async (req, res) => {
+  const share = authZipRequest(req, res);
+  if (!share) return;
 
   try {
-    let assets = [];
-    if (share.share_type === 'album') {
-      assets = await getAlbumAssets(share.immich_album_id);
-    } else if (share.share_type === 'tag') {
-      assets = await getAssetsByTag(share.immich_tag_id);
-    }
-
-    const idsParam = req.query.ids;
-    if (idsParam) {
-      const allowed = new Set(
-        idsParam.split(',').map(s => s.trim()).filter(s => UUID_RE.test(s))
-      );
-      assets = assets.filter(a => allowed.has(a.id));
-    }
+    const parts = planZipParts(await loadZipAssets(share, req.query.ids));
+    const partNum = req.query.part ? parseInt(req.query.part, 10) : (parts.length === 1 ? 1 : 0);
+    if (!partNum && parts.length > 1) return res.status(400).send('This share is split into parts; specify ?part=N');
+    if (!(partNum >= 1 && partNum <= parts.length)) return res.status(404).send('No assets found');
+    const items = parts[partNum - 1].items;
+    const assets = items.map(it => it.asset);
+    const partLabel = parts.length > 1 ? `_part${partNum}of${parts.length}` : '';
 
     if (assets.length === 0) {
       return res.status(404).send('No assets found');
@@ -277,7 +321,7 @@ router.get('/zip/:id', async (req, res) => {
 
     const safeName = share.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 60) || 'share';
     res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', `attachment; filename="${safeName}.zip"`);
+    res.setHeader('Content-Disposition', `attachment; filename="${safeName}${partLabel}.zip"`);
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('X-Accel-Buffering', 'no'); // stop nginx buffering the whole archive
     res.flushHeaders();
@@ -314,7 +358,7 @@ router.get('/zip/:id', async (req, res) => {
       }
 
       let filename = asset.originalFileName || asset.id;
-      filename = `${String(i + 1).padStart(4, '0')}_${filename}`;
+      filename = `${String(items[i].index + 1).padStart(4, '0')}_${filename}`;
 
       const nameBytes = Buffer.from(filename, 'utf8');
       const dosTime = dosDateTime(new Date());
