@@ -278,18 +278,38 @@ router.get('/zip/:id', async (req, res) => {
     const safeName = share.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 60) || 'share';
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', `attachment; filename="${safeName}.zip"`);
-    res.setHeader('Transfer-Encoding', 'chunked');
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('X-Accel-Buffering', 'no'); // stop nginx buffering the whole archive
+    res.flushHeaders();
 
+    let clientGone = false;
+    res.on('close', () => { clientGone = true; });
+
+    // Honour backpressure so a slow client doesn't make us buffer gigabytes in RAM.
+    const write = async (buf) => {
+      if (clientGone) throw new Error('Client disconnected');
+      if (!res.write(buf)) {
+        await new Promise((resolve) => {
+          const done = () => { res.off('drain', done); res.off('close', done); resolve(); };
+          res.once('drain', done);
+          res.once('close', done);
+        });
+      }
+    };
+
+    // All entries use ZIP64 so archives over 4 GB (or with huge offsets) are valid.
     const crc32Table = makeCrc32Table();
     const centralDir = [];
-    let offset = 0;
+    let offset = 0n;
 
     for (let i = 0; i < assets.length; i++) {
+      if (clientGone) return;
       const asset = assets[i];
       let upstream;
       try {
         upstream = await proxyAssetOriginal(asset.id);
-      } catch {
+      } catch (err) {
+        console.error(`[zip] Skipping asset ${asset.id}: ${err.message}`);
         continue;
       }
 
@@ -299,85 +319,117 @@ router.get('/zip/:id', async (req, res) => {
       const nameBytes = Buffer.from(filename, 'utf8');
       const dosTime = dosDateTime(new Date());
 
-      const lfh = Buffer.alloc(30 + nameBytes.length);
+      const lfh = Buffer.alloc(30 + nameBytes.length + 20);
       lfh.writeUInt32LE(0x04034b50, 0);
-      lfh.writeUInt16LE(20, 4);
-      lfh.writeUInt16LE(0x0808, 6);
+      lfh.writeUInt16LE(45, 4);
+      lfh.writeUInt16LE(0x0808, 6); // data descriptor + UTF-8 names
       lfh.writeUInt16LE(0, 8);
       lfh.writeUInt16LE(dosTime.time, 10);
       lfh.writeUInt16LE(dosTime.date, 12);
       lfh.writeUInt32LE(0, 14);
-      lfh.writeUInt32LE(0, 18);
-      lfh.writeUInt32LE(0, 22);
+      lfh.writeUInt32LE(0xFFFFFFFF, 18);
+      lfh.writeUInt32LE(0xFFFFFFFF, 22);
       lfh.writeUInt16LE(nameBytes.length, 26);
-      lfh.writeUInt16LE(0, 28);
+      lfh.writeUInt16LE(20, 28);
       nameBytes.copy(lfh, 30);
+      const x = 30 + nameBytes.length;
+      lfh.writeUInt16LE(0x0001, x);
+      lfh.writeUInt16LE(16, x + 2);
 
-      res.write(lfh);
+      await write(lfh);
 
       let crc = 0xFFFFFFFF;
       let fileSize = 0;
 
-      for await (const chunk of upstream.body) {
-        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-        for (let j = 0; j < buf.length; j++) {
-          crc = (crc >>> 8) ^ crc32Table[(crc ^ buf[j]) & 0xFF];
+      try {
+        for await (const chunk of upstream.body) {
+          const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          for (let j = 0; j < buf.length; j++) {
+            crc = (crc >>> 8) ^ crc32Table[(crc ^ buf[j]) & 0xFF];
+          }
+          fileSize += buf.length;
+          await write(buf);
         }
-        fileSize += buf.length;
-        res.write(buf);
+      } catch (err) {
+        if (clientGone) return;
+        throw err;
       }
 
       crc = (crc ^ 0xFFFFFFFF) >>> 0;
+      const size = BigInt(fileSize);
 
-      const dd = Buffer.alloc(16);
+      const dd = Buffer.alloc(24);
       dd.writeUInt32LE(0x08074b50, 0);
       dd.writeUInt32LE(crc, 4);
-      dd.writeUInt32LE(fileSize, 8);
-      dd.writeUInt32LE(fileSize, 12);
-      res.write(dd);
+      dd.writeBigUInt64LE(size, 8);
+      dd.writeBigUInt64LE(size, 16);
+      await write(dd);
 
-      const cde = Buffer.alloc(46 + nameBytes.length);
+      const cde = Buffer.alloc(46 + nameBytes.length + 28);
       cde.writeUInt32LE(0x02014b50, 0);
-      cde.writeUInt16LE(20, 4);
-      cde.writeUInt16LE(20, 6);
+      cde.writeUInt16LE(45, 4);
+      cde.writeUInt16LE(45, 6);
       cde.writeUInt16LE(0x0808, 8);
       cde.writeUInt16LE(0, 10);
       cde.writeUInt16LE(dosTime.time, 12);
       cde.writeUInt16LE(dosTime.date, 14);
       cde.writeUInt32LE(crc, 16);
-      cde.writeUInt32LE(fileSize, 20);
-      cde.writeUInt32LE(fileSize, 24);
+      cde.writeUInt32LE(0xFFFFFFFF, 20);
+      cde.writeUInt32LE(0xFFFFFFFF, 24);
       cde.writeUInt16LE(nameBytes.length, 28);
-      cde.writeUInt16LE(0, 30);
-      cde.writeUInt16LE(0, 32);
-      cde.writeUInt16LE(0, 34);
-      cde.writeUInt16LE(0, 36);
-      cde.writeUInt32LE(0, 38);
-      cde.writeUInt32LE(offset, 42);
+      cde.writeUInt16LE(28, 30);
+      cde.writeUInt32LE(0xFFFFFFFF, 42);
       nameBytes.copy(cde, 46);
+      const y = 46 + nameBytes.length;
+      cde.writeUInt16LE(0x0001, y);
+      cde.writeUInt16LE(24, y + 2);
+      cde.writeBigUInt64LE(size, y + 4);
+      cde.writeBigUInt64LE(size, y + 12);
+      cde.writeBigUInt64LE(offset, y + 20);
 
       centralDir.push(cde);
-      offset += lfh.length + fileSize + 16;
+      offset += BigInt(lfh.length) + size + 24n;
     }
 
     const cdOffset = offset;
-    for (const cde of centralDir) res.write(cde);
-    const cdSize = centralDir.reduce((a, b) => a + b.length, 0);
+    let cdSize = 0n;
+    for (const cde of centralDir) { await write(cde); cdSize += BigInt(cde.length); }
+
+    const count = BigInt(centralDir.length);
+    const eocd64 = Buffer.alloc(56);
+    eocd64.writeUInt32LE(0x06064b50, 0);
+    eocd64.writeBigUInt64LE(44n, 4);
+    eocd64.writeUInt16LE(45, 12);
+    eocd64.writeUInt16LE(45, 14);
+    eocd64.writeUInt32LE(0, 16);
+    eocd64.writeUInt32LE(0, 20);
+    eocd64.writeBigUInt64LE(count, 24);
+    eocd64.writeBigUInt64LE(count, 32);
+    eocd64.writeBigUInt64LE(cdSize, 40);
+    eocd64.writeBigUInt64LE(cdOffset, 48);
+    await write(eocd64);
+
+    const locator = Buffer.alloc(20);
+    locator.writeUInt32LE(0x07064b50, 0);
+    locator.writeUInt32LE(0, 4);
+    locator.writeBigUInt64LE(cdOffset + cdSize, 8);
+    locator.writeUInt32LE(1, 16);
+    await write(locator);
 
     const eocd = Buffer.alloc(22);
     eocd.writeUInt32LE(0x06054b50, 0);
-    eocd.writeUInt16LE(0, 4);
-    eocd.writeUInt16LE(0, 6);
-    eocd.writeUInt16LE(centralDir.length, 8);
-    eocd.writeUInt16LE(centralDir.length, 10);
-    eocd.writeUInt32LE(cdSize, 12);
-    eocd.writeUInt32LE(cdOffset, 16);
-    eocd.writeUInt16LE(0, 20);
-    res.write(eocd);
+    eocd.writeUInt16LE(0xFFFF, 8);
+    eocd.writeUInt16LE(0xFFFF, 10);
+    eocd.writeUInt32LE(0xFFFFFFFF, 12);
+    eocd.writeUInt32LE(0xFFFFFFFF, 16);
+    await write(eocd);
     res.end();
   } catch (err) {
+    console.error(`[zip] Generation failed: ${err.message}`);
     if (!res.headersSent) {
       res.status(502).send(`ZIP generation failed: ${err.message}`);
+    } else {
+      res.destroy(err); // abort so the browser reports a failed download instead of a truncated "success"
     }
   }
 });
