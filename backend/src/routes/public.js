@@ -349,20 +349,8 @@ router.get('/zip/:id', async (req, res) => {
     const centralDir = [];
     let offset = 0n;
 
-    for (let i = 0; i < assets.length; i++) {
-      if (clientGone) return;
-      const asset = assets[i];
-      let upstream;
-      try {
-        upstream = await proxyAssetOriginal(asset.id);
-      } catch (err) {
-        console.error(`[zip] Skipping asset ${asset.id}: ${err.message}`);
-        continue;
-      }
-
-      let filename = asset.originalFileName || asset.id;
-      filename = `${String(items[i].index + 1).padStart(4, '0')}_${filename}`;
-
+    // Writes one stored ZIP entry from an async-iterable of chunks.
+    const addEntry = async (filename, chunks) => {
       const nameBytes = Buffer.from(filename, 'utf8');
       const dosTime = dosDateTime(new Date());
 
@@ -389,7 +377,7 @@ router.get('/zip/:id', async (req, res) => {
       let fileSize = 0;
 
       try {
-        for await (const chunk of upstream.body) {
+        for await (const chunk of chunks) {
           const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
           for (let j = 0; j < buf.length; j++) {
             crc = (crc >>> 8) ^ crc32Table[(crc ^ buf[j]) & 0xFF];
@@ -436,6 +424,28 @@ router.get('/zip/:id', async (req, res) => {
 
       centralDir.push(cde);
       offset += BigInt(lfh.length) + size + 24n;
+    };
+
+    const skipped = [];
+    for (let i = 0; i < assets.length; i++) {
+      if (clientGone) return;
+      const asset = assets[i];
+      const name = asset.originalFileName || asset.id;
+      let upstream;
+      try {
+        upstream = await proxyAssetOriginal(asset.id);
+      } catch (err) {
+        console.error(`[zip] Skipping asset ${asset.id}: ${err.message}`);
+        skipped.push(`${String(items[i].index + 1).padStart(4, '0')}_${name}`);
+        continue;
+      }
+      await addEntry(`${String(items[i].index + 1).padStart(4, '0')}_${name}`, upstream.body);
+    }
+
+    // Tell the downloader about files that couldn't be included instead of failing silently.
+    if (skipped.length) {
+      const report = `${skipped.length} file(s) could not be included in this download and were skipped:\r\n\r\n${skipped.join('\r\n')}\r\n\r\nTry downloading again, or download these files individually.\r\n`;
+      await addEntry('_MISSING_FILES.txt', [Buffer.from(report, 'utf8')]);
     }
 
     const cdOffset = offset;
