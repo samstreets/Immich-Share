@@ -1,4 +1,12 @@
 const fetch = require('node-fetch');
+const http = require('http');
+const https = require('https');
+
+// Fresh connection per request: reused keep-alive sockets get dropped by Immich /
+// reverse proxies during long ZIP streams, surfacing as "socket hang up".
+const httpAgent = new http.Agent({ keepAlive: false });
+const httpsAgent = new https.Agent({ keepAlive: false });
+const agentFor = (u) => (u.startsWith('https:') ? httpsAgent : httpAgent);
 const { getDb } = require('./db');
 
 function getImmichConfig() {
@@ -132,12 +140,26 @@ async function proxyAssetOriginal(assetId) {
   const { url, apiKey } = getImmichConfig();
   if (!url || !apiKey) throw new Error('Immich not configured');
 
-  const response = await fetch(`${url}/api/assets/${assetId}/original`, {
-    headers: { 'x-api-key': apiKey },
-  });
-
-  if (!response.ok) throw new Error(`Failed to fetch original: ${response.status}`);
-  return response;
+  // Retry transient failures (socket hang up, 5xx) with a short backoff
+  const attempts = 4;
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    if (i > 0) await new Promise(r => setTimeout(r, 500 * i));
+    try {
+      const response = await fetch(`${url}/api/assets/${assetId}/original`, {
+        headers: { 'x-api-key': apiKey },
+        agent: agentFor(url),
+      });
+      if (response.ok) return response;
+      lastErr = new Error(`Failed to fetch original: ${response.status}`);
+      response.body.resume?.();
+      if (response.status < 500) throw lastErr; // 4xx won't improve on retry
+    } catch (err) {
+      lastErr = err;
+      if (/Failed to fetch original: [1-4]\d\d/.test(err.message)) throw err;
+    }
+  }
+  throw lastErr;
 }
 
 async function proxyAssetVideo(assetId, rangeHeader) {
