@@ -253,7 +253,7 @@ async function loadZipAssets(share, idsParam) {
   if (share.share_type === 'album') {
     assets = await getAlbumAssets(share.immich_album_id, { withExif: true });
   } else if (share.share_type === 'tag') {
-    assets = await getAssetsByTag(share.immich_tag_id);
+    assets = await getAssetsByTag(share.immich_tag_id, { withExif: true });
   }
   if (idsParam) {
     const allowed = new Set(
@@ -261,7 +261,10 @@ async function loadZipAssets(share, idsParam) {
     );
     assets = assets.filter(a => allowed.has(a.id));
   }
-  return assets;
+  // Immich search order isn't guaranteed to be stable between requests. Each ZIP part is a
+  // separate request that re-plans, so sort deterministically to keep parts consistent
+  // (no duplicated or missing files across parts).
+  return [...assets].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
 
 // Greedily group assets into parts bounded by size and file count.

@@ -94,14 +94,22 @@ async function tagAssets(tagId, assetIds) {
 
 // Assets for a tag via search
 async function getAssetsByTag(tagId, { withExif = false } = {}) {
-  // Immich search endpoint with tag filter
-  const body = { tagIds: [tagId], size: 1000, page: 1, ...(withExif ? { withExif: true } : {}) };
-  const result = await immichRequest('/search/metadata', {
-    method: 'POST',
-    body: JSON.stringify(body),
-  });
-  // Result shape: { assets: { items: [...] } }
-  return result?.assets?.items || [];
+  // Immich search endpoint with tag filter, paginated so tags with >1000 assets aren't truncated
+  const items = [];
+  let page = 1;
+  for (let i = 0; i < 1000; i++) {
+    const result = await immichRequest('/search/metadata', {
+      method: 'POST',
+      body: JSON.stringify({ tagIds: [tagId], size: 1000, page, ...(withExif ? { withExif: true } : {}) }),
+    });
+    // Result shape: { assets: { items: [...], nextPage } }
+    const batch = result?.assets?.items || [];
+    items.push(...batch);
+    const nextPage = result?.assets?.nextPage;
+    if (!nextPage || batch.length === 0) break;
+    page = typeof nextPage === 'number' ? nextPage : page + 1;
+  }
+  return items;
 }
 
 async function getAsset(assetId) {
