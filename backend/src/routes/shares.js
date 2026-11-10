@@ -1,4 +1,5 @@
 const express = require('express');
+const { asyncRouter } = require('../asyncRoutes');
 const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
 const crypto = require('crypto');
@@ -8,7 +9,7 @@ const { assertSafeWebhookUrl } = require('../urlGuard');
 const { generateQR, matrixToSVG } = require('../qr');
 const { syncShare, isSyncing, purgeShareCache, sweepOrphans, enforceLimits } = require('../localCache');
 
-const router = express.Router();
+const router = asyncRouter();
 
 router.use(requireAuth);
 
@@ -168,8 +169,10 @@ router.get('/:id/qr', (req, res) => {
   const url = shareUrl(externalUrl, share);
 
   const size = Math.min(Math.max(parseInt(req.query.size || '256', 10), 64), 1024);
-  const dark = req.query.dark ? decodeURIComponent(req.query.dark) : '#13161f';
-  const light = req.query.light ? decodeURIComponent(req.query.light) : '#ffffff';
+  // Colours are written straight into SVG markup, so accept hex colours only
+  const HEX_COLOR = /^#[0-9a-f]{3,8}$/i;
+  const dark = typeof req.query.dark === 'string' && HEX_COLOR.test(req.query.dark) ? req.query.dark : '#13161f';
+  const light = typeof req.query.light === 'string' && HEX_COLOR.test(req.query.light) ? req.query.light : '#ffffff';
 
   try {
     const matrix = generateQR(url);
@@ -302,7 +305,7 @@ router.post('/', async (req, res) => {
     notify_email,
   } = req.body;
 
-  if (!name || !password) {
+  if (!name || !password || typeof name !== 'string' || typeof password !== 'string') {
     return res.status(400).json({ error: 'Name and password are required' });
   }
   if (!share_type || !['album', 'tag'].includes(share_type)) {

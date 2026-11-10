@@ -30,28 +30,38 @@ const SESSION_SECRET = crypto.createHmac('sha256', JWT_SECRET).update('immich-sh
 
 const SESSION_TTL_MS = 8 * 60 * 60 * 1000; // 8 hours
 
-function makeToken(shareId) {
-  const expiry = Date.now() + SESSION_TTL_MS;
-  const payload = `${shareId}.${expiry}`;
-  const sig = crypto
-    .createHmac('sha256', SESSION_SECRET)
-    .update(payload)
+// Fingerprint of the share's current credentials. It is mixed into the
+// signature so that changing the password or regenerating/revoking the
+// passwordless link invalidates every session issued before the change.
+function credentialTag(share) {
+  return crypto
+    .createHash('sha256')
+    .update(`${share.password_hash || ''}|${share.access_token || ''}`)
     .digest('base64url');
-  return `${payload}.${sig}`;
 }
 
-function verifyToken(shareId, token) {
-  if (!token) return false;
+function sign(share, expiry) {
+  return crypto
+    .createHmac('sha256', SESSION_SECRET)
+    .update(`${share.id}.${expiry}.${credentialTag(share)}`)
+    .digest('base64url');
+}
+
+/** @param {object} share  share row (needs id, password_hash, access_token) */
+function makeToken(share) {
+  const expiry = Date.now() + SESSION_TTL_MS;
+  return `${share.id}.${expiry}.${sign(share, expiry)}`;
+}
+
+/** @param {object} share  share row (needs id, password_hash, access_token) */
+function verifyToken(share, token) {
+  if (!share || typeof token !== 'string') return false;
   const parts = token.split('.');
   if (parts.length !== 3) return false;
   const [sid, expiry, sig] = parts;
-  if (sid !== shareId) return false;
-  if (Date.now() > Number(expiry)) return false;
-  const payload = `${sid}.${expiry}`;
-  const expected = crypto
-    .createHmac('sha256', SESSION_SECRET)
-    .update(payload)
-    .digest('base64url');
+  if (sid !== share.id) return false;
+  if (!/^\d{1,16}$/.test(expiry) || Date.now() > Number(expiry)) return false;
+  const expected = sign(share, expiry);
   // Constant-time comparison
   try {
     return crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected));

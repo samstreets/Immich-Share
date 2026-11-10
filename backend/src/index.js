@@ -18,7 +18,17 @@ const { startLocalSync } = require('./localCache');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.set('trust proxy', 1);
+// Number of reverse proxies in front of this app (used for client IPs in rate
+// limiting and access logs). Defaults to 1. Set TRUST_PROXY=0 when the port is
+// exposed directly, otherwise clients can spoof X-Forwarded-For and dodge the
+// rate limits.
+const TRUST_PROXY = (process.env.TRUST_PROXY ?? '1').trim();
+app.set('trust proxy',
+  /^\d+$/.test(TRUST_PROXY) ? parseInt(TRUST_PROXY, 10)
+    : TRUST_PROXY === 'true' ? true
+    : TRUST_PROXY === 'false' ? false
+    : TRUST_PROXY);
+app.disable('x-powered-by');
 
 app.use(helmet({
   contentSecurityPolicy: {
@@ -132,6 +142,9 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/public', publicRoutes);
 app.use('/api/proxy', proxyRoutes);
 
+// Unknown API routes get a JSON 404 rather than the SPA shell
+app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
+
 // Serve frontend in production
 if (process.env.NODE_ENV === 'production') {
   app.use(express.static(path.join(__dirname, '../../frontend/dist')));
@@ -139,6 +152,21 @@ if (process.env.NODE_ENV === 'production') {
     res.sendFile(path.join(__dirname, '../../frontend/dist/index.html'));
   });
 }
+
+// Last-resort error handler: never leak stack traces, never leave a request hanging
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  const status = err.status || err.statusCode || 500;
+  if (status >= 500) console.error(`[error] ${req.method} ${req.path}: ${err.stack || err.message}`);
+  res.status(status).json({
+    error: status >= 500 ? 'Internal server error' : (err.type === 'entity.too.large' ? 'Request body too large' : 'Bad request'),
+  });
+});
+
+// A stray rejection in a background job must not take the server down
+process.on('unhandledRejection', (reason) => {
+  console.error('[error] Unhandled promise rejection:', reason?.stack || reason);
+});
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log('Immich Share running on port ' + PORT);

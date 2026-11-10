@@ -1,4 +1,5 @@
 const express = require('express');
+const { asyncRouter } = require('../asyncRoutes');
 const bcrypt = require('bcryptjs');
 const os = require('os');
 const fs = require('fs');
@@ -11,7 +12,7 @@ const {
   isLocalReady, listLocalAssets, getCachedFile, enqueueUpload, processPending,
 } = require('../localCache');
 
-const router = express.Router();
+const router = asyncRouter();
 
 const MAX_CHUNKS        = 400;
 const MAX_UPLOAD_BYTES  = MAX_CHUNKS * 50 * 1024 * 1024;
@@ -23,6 +24,21 @@ function sanitizeFilename(name) {
   const base = String(name || '').split(/[\\/]/).pop();
   const clean = base.replace(/[\x00-\x1f\x7f"\\]/g, '_').trim().slice(0, 200);
   return clean || 'upload';
+}
+
+// ZIP entry names come from Immich's originalFileName, which an uploader controls.
+// Keep them to a single path component so extracting can never write outside the
+// target folder ("zip slip").
+function zipEntryName(name) {
+  const clean = String(name || '').replace(/[\\/\x00-\x1f\x7f]/g, '_').replace(/^\.+/, '_').slice(0, 200);
+  return clean || 'file';
+}
+
+// Accept only parseable dates from clients; returns an ISO string or null.
+function cleanDate(v) {
+  if (typeof v !== 'string' || v.length > 40) return null;
+  const d = new Date(v);
+  return isNaN(d) ? null : d.toISOString();
 }
 
 // Whitelist of EXIF fields exposed to viewers. GPS/location fields are only
@@ -130,7 +146,7 @@ router.get('/info/:id', (req, res) => {
 // identically after the initial gate check.
 router.get('/token-access/:id', (req, res) => {
   const { k } = req.query;
-  if (!k) return res.status(400).json({ error: 'Access token (k) required' });
+  if (!k || typeof k !== 'string') return res.status(400).json({ error: 'Access token (k) required' });
 
   const share = getActiveShare(req.params.id);
   if (!share) return res.status(404).json({ error: 'Share not found or inactive' });
@@ -154,7 +170,7 @@ router.get('/token-access/:id', (req, res) => {
 
   logAccess(share, req, 'view');
 
-  const sessionToken = makeToken(share.id);
+  const sessionToken = makeToken(share);
   res.json({
     id: share.id,
     slug: share.slug,
@@ -175,7 +191,7 @@ router.get('/token-access/:id', (req, res) => {
 // Verify password -> session token
 router.post('/verify/:id', async (req, res) => {
   const { password } = req.body;
-  if (!password) return res.status(400).json({ error: 'Password required' });
+  if (!password || typeof password !== 'string') return res.status(400).json({ error: 'Password required' });
 
   const share = getActiveShare(req.params.id);
   if (!share) return res.status(404).json({ error: 'Share not found or inactive' });
@@ -189,7 +205,7 @@ router.post('/verify/:id', async (req, res) => {
 
   logAccess(share, req, 'view');
 
-  const sessionToken = makeToken(share.id);
+  const sessionToken = makeToken(share);
   res.json({
     id: share.id,
     slug: share.slug,
@@ -214,7 +230,7 @@ router.post('/content/:id', async (req, res) => {
   const share = getActiveShare(req.params.id);
   if (!share) return res.status(404).json({ error: 'Share not found' });
 
-  if (!verifyToken(share.id, sessionToken)) {
+  if (!verifyToken(share, sessionToken)) {
     return res.status(401).json({ error: 'Invalid or expired session. Please re-enter the password.' });
   }
 
@@ -304,7 +320,7 @@ function authZipRequest(req, res) {
   const share = getActiveShare(req.params.id);
   if (!share) { res.status(404).send('Share not found'); return null; }
   if (!share.allow_download) { res.status(403).send('Downloads not allowed for this share'); return null; }
-  if (!verifyToken(share.id, sessionToken)) { res.status(401).send('Invalid or expired session'); return null; }
+  if (!verifyToken(share, sessionToken)) { res.status(401).send('Invalid or expired session'); return null; }
   return share;
 }
 
@@ -444,7 +460,7 @@ router.get('/zip/:id', async (req, res) => {
     for (let i = 0; i < assets.length; i++) {
       if (clientGone) return;
       const asset = assets[i];
-      const name = asset.originalFileName || asset.id;
+      const name = zipEntryName(asset.originalFileName || asset.id);
       let body;
       try {
         const cached = share.local_sync ? getCachedFile(share.id, asset.id, 'original') : null;
@@ -527,7 +543,7 @@ router.post('/upload/:id', async (req, res) => {
   const share = getActiveShare(req.params.id);
   if (!share) return res.status(404).json({ error: 'Share not found' });
 
-  if (!verifyToken(share.id, sessionToken)) {
+  if (!verifyToken(share, sessionToken)) {
     return res.status(401).json({ error: 'Invalid or expired session.' });
   }
 
@@ -599,7 +615,7 @@ router.post('/upload-chunk/:id', async (req, res) => {
 
   const share = getActiveShare(req.params.id);
   if (!share) return res.status(404).json({ error: 'Share not found' });
-  if (!verifyToken(share.id, sessionToken)) return res.status(401).json({ error: 'Invalid or expired session.' });
+  if (!verifyToken(share, sessionToken)) return res.status(401).json({ error: 'Invalid or expired session.' });
   if (!share.allow_upload) return res.status(403).json({ error: 'Uploads not allowed for this share' });
 
   const contentType = req.headers['content-type'] || '';
@@ -710,14 +726,17 @@ router.post('/upload-assemble/:id', async (req, res) => {
 
   const share = getActiveShare(req.params.id);
   if (!share) return res.status(404).json({ error: 'Share not found' });
-  if (!verifyToken(share.id, sessionToken)) return res.status(401).json({ error: 'Invalid or expired session.' });
+  if (!verifyToken(share, sessionToken)) return res.status(401).json({ error: 'Invalid or expired session.' });
   if (!share.allow_upload) return res.status(403).json({ error: 'Uploads not allowed' });
 
-  const { uploadId, filename: rawFilename, fileCreatedAt, fileModifiedAt } = req.body;
+  const { uploadId, filename: rawFilename } = req.body;
+  // Dates are written into the multipart body sent to Immich — never pass raw client text through
+  const fileCreatedAt = cleanDate(req.body.fileCreatedAt);
+  const fileModifiedAt = cleanDate(req.body.fileModifiedAt);
   const filename = rawFilename ? sanitizeFilename(rawFilename) : rawFilename;
   if (!uploadId || !filename) return res.status(400).json({ error: 'Missing uploadId or filename' });
 
-  if (!UUID_RE.test(uploadId)) {
+  if (typeof uploadId !== 'string' || !UUID_RE.test(uploadId)) {
     return res.status(400).json({ error: 'Invalid uploadId format' });
   }
 
@@ -787,7 +806,7 @@ router.post('/upload-assemble/:id', async (req, res) => {
   try {
     const fetch = require('node-fetch');
     const mimeType = guessMimeType(filename);
-    const boundary = '----ImmichShareBoundary' + Date.now().toString(16);
+    const boundary = '----ImmichShareBoundary' + require('crypto').randomBytes(16).toString('hex');
 
     const buildField = (name, value) => Buffer.concat([
       Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n`),
@@ -881,7 +900,7 @@ router.delete('/upload-chunk/:id/:uploadId', (req, res) => {
   if (!sessionToken) return res.status(400).json({ error: 'Session token required' });
 
   const share = getActiveShare(req.params.id);
-  if (!share || !verifyToken(share.id, sessionToken)) {
+  if (!share || !verifyToken(share, sessionToken)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
