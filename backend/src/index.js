@@ -13,6 +13,7 @@ const publicRoutes = require('./routes/public');
 const proxyRoutes = require('./routes/proxy');
 const { startWatcher } = require('./watcher');
 const { startCleanup } = require('./cleanup');
+const { startLocalSync } = require('./localCache');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -122,6 +123,7 @@ initDb();
 // Start background jobs
 startWatcher();
 startCleanup();
+startLocalSync();
 
 // API Routes
 app.use('/api/auth', authRoutes);

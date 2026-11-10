@@ -3,6 +3,7 @@ const { getDb } = require('../db');
 const { proxyAssetThumbnail, proxyAssetOriginal, proxyAssetVideo } = require('../immich');
 const { verifyToken } = require('../shareSession');
 const { shareContainsAsset } = require('../shareAssets');
+const { isLocalReady, localHasAsset, getCachedFile, sendCached } = require('../localCache');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -25,6 +26,8 @@ async function authorizeAsset(shareId, assetId, token) {
   if (!validateSession(shareId, token)) return null;
   const share = getShare(shareId);
   if (!share) return null;
+  // Local-sync shares answer from the cache, so they keep working if Immich is unreachable
+  if (isLocalReady(share) && localHasAsset(share.id, assetId)) return share;
   try {
     if (!(await shareContainsAsset(share, assetId))) return null;
   } catch {
@@ -41,8 +44,13 @@ function getShare(shareId) {
 // ── Thumbnail ─────────────────────────────────────────────────────────────────
 router.get('/thumbnail/:shareId/:assetId', async (req, res) => {
   const { shareId, assetId } = req.params;
-  if (!(await authorizeAsset(shareId, assetId, req.query.t))) {
+  const share = await authorizeAsset(shareId, assetId, req.query.t);
+  if (!share) {
     return res.status(401).send('Unauthorized');
+  }
+  if (share.local_sync) {
+    const cached = getCachedFile(share.id, assetId, 'thumbnail');
+    if (cached) return sendCached(res, cached);
   }
   try {
     const upstream = await proxyAssetThumbnail(assetId, 'thumbnail');
@@ -57,8 +65,13 @@ router.get('/thumbnail/:shareId/:assetId', async (req, res) => {
 // ── Preview (large thumbnail) ─────────────────────────────────────────────────
 router.get('/preview/:shareId/:assetId', async (req, res) => {
   const { shareId, assetId } = req.params;
-  if (!(await authorizeAsset(shareId, assetId, req.query.t))) {
+  const share = await authorizeAsset(shareId, assetId, req.query.t);
+  if (!share) {
     return res.status(401).send('Unauthorized');
+  }
+  if (share.local_sync) {
+    const cached = getCachedFile(share.id, assetId, 'preview');
+    if (cached) return sendCached(res, cached);
   }
   try {
     const upstream = await proxyAssetThumbnail(assetId, 'preview');
@@ -80,6 +93,10 @@ router.get('/original/:shareId/:assetId', async (req, res) => {
   if (!share.allow_download) {
     return res.status(403).send('Downloads not allowed for this share');
   }
+  if (share.local_sync) {
+    const cached = getCachedFile(share.id, assetId, 'original');
+    if (cached) return sendCached(res, cached, { download: true });
+  }
   try {
     const upstream = await proxyAssetOriginal(assetId);
     res.set('Content-Type', upstream.headers.get('content-type') || 'application/octet-stream');
@@ -97,8 +114,14 @@ router.get('/original/:shareId/:assetId', async (req, res) => {
 // ── Video with Range support (needed for seeking) ─────────────────────────────
 router.get('/video/:shareId/:assetId', async (req, res) => {
   const { shareId, assetId } = req.params;
-  if (!(await authorizeAsset(shareId, assetId, req.query.t))) {
+  const share = await authorizeAsset(shareId, assetId, req.query.t);
+  if (!share) {
     return res.status(401).send('Unauthorized');
+  }
+  // Cached original supports Range natively (Express sendFile)
+  if (share.local_sync) {
+    const cached = getCachedFile(share.id, assetId, 'original');
+    if (cached) return sendCached(res, cached);
   }
   try {
     // Forward the Range header to Immich so seeking works

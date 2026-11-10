@@ -200,4 +200,5 @@ module.exports = {
   proxyAssetOriginal,
   proxyAssetVideo,
   testConnection,
+  getImmichConfig,
 };

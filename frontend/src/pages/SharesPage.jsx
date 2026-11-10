@@ -635,6 +635,8 @@ function ShareModal({ onClose, onSaved, editShare }) {
     allow_upload: editShare?.allow_upload || false,
     show_metadata: editShare?.show_metadata || false,
     show_location: editShare?.show_location || false,
+    local_sync: !!editShare?.local_sync,
+    local_sync_max_gb: editShare?.local_sync_max_gb ?? '',
     upload_tag_ids: existingTagIds,
     watch_tag_ids: editShare?.watch_tag_ids
       ? editShare.watch_tag_ids.split(',').map(s => s.trim()).filter(Boolean)
@@ -701,6 +703,8 @@ function ShareModal({ onClose, onSaved, editShare }) {
             allow_upload: form.allow_upload,
             show_metadata: form.show_metadata,
             show_location: form.show_metadata && form.show_location,
+            local_sync: form.local_sync,
+            local_sync_max_gb: form.local_sync_max_gb === '' ? null : form.local_sync_max_gb,
             upload_tag_ids: uploadTagIdsStr,
             slug: form.slug,
           },
@@ -721,6 +725,8 @@ function ShareModal({ onClose, onSaved, editShare }) {
             allow_upload: form.allow_upload,
             show_metadata: form.show_metadata,
             show_location: form.show_metadata && form.show_location,
+            local_sync: form.local_sync,
+            local_sync_max_gb: form.local_sync_max_gb === '' ? undefined : form.local_sync_max_gb,
             upload_tag_ids: uploadTagIdsStr,
             slug: form.slug || undefined,
           },
@@ -936,7 +942,22 @@ function ShareModal({ onClose, onSaved, editShare }) {
               {form.show_metadata && (
                 <CheckBox checked={form.show_location} onChange={v => set('show_location', v)} label="Include location (GPS)" />
               )}
+              <CheckBox checked={form.local_sync} onChange={v => set('local_sync', v)} label="Keep synced locally" />
             </div>
+            {form.local_sync && (
+              <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: '-6px 0 16px', lineHeight: 1.5 }}>
+                Thumbnails, previews and originals are copied to this server's disk and kept in sync with Immich,
+                so viewers are served locally. Uploads are saved here first, then sent to Immich (retried if Immich is
+                unreachable) and kept in the cache. Uses disk space on the data volume.
+              </p>
+            )}
+            {form.local_sync && (
+              <div className="form-group">
+                <label>Max cache size for this share (GB, optional)</label>
+                <input type="number" min="0" step="0.5" value={form.local_sync_max_gb} onChange={e => set('local_sync_max_gb', e.target.value)} placeholder="No limit" style={{ width: 140 }} />
+                <span className="hint">Once reached, remaining originals are served from Immich instead. Leave empty for no per-share limit (the global limit in Settings still applies).</span>
+              </div>
+            )}
 
             {/* Upload tags — only visible when uploads are enabled */}
             {form.allow_upload && (
@@ -1043,6 +1064,25 @@ export default function SharesPage() {
   }, [api, search, typeFilter, statusFilter])
 
   useEffect(() => { load() }, [])
+
+  // While a local sync is running, refresh the list so progress shows up (keeps selection intact)
+  const anySyncing = shares.some(s => s.local_syncing)
+  useEffect(() => {
+    if (!anySyncing) return
+    const t = setTimeout(async () => {
+      try { setShares(await api('/shares?' + new URLSearchParams({
+        ...(search ? { search } : {}), ...(typeFilter ? { type: typeFilter } : {}), ...(statusFilter ? { status: statusFilter } : {}),
+      }))) } catch {}
+    }, 3000)
+    return () => clearTimeout(t)
+  }, [anySyncing, shares, api, search, typeFilter, statusFilter])
+
+  async function syncNow(share) {
+    try {
+      await api(`/shares/${share.id}/sync`, { method: 'POST' })
+      setShares(prev => prev.map(s => s.id === share.id ? { ...s, local_syncing: true } : s))
+    } catch (e) { alert(e.message) }
+  }
   useEffect(() => {
     function handleClick() { setOpenMenu(null) }
     document.addEventListener('click', handleClick)
@@ -1272,6 +1312,19 @@ export default function SharesPage() {
                       <span>{share.allow_download ? '⬇ On' : '⬇ Off'}</span>
                       {share.allow_upload && <span>⬆ Uploads on</span>}
                     </div>
+
+                    {share.local_sync ? (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: '0.72rem', fontWeight: 600, marginBottom: 10, color: share.local_sync_error ? 'var(--yellow, #facc15)' : 'var(--text-dim)' }}>
+                        <span>💾 Local sync:{' '}
+                          {share.local_syncing ? 'syncing…'
+                            : share.local_sync_at ? `${share.local_cached_count} item${share.local_cached_count !== 1 ? 's' : ''} · ${(share.local_cache_bytes / 1024 ** 3).toFixed(2)} GB${share.local_sync_max_gb ? ` of ${share.local_sync_max_gb} GB` : ''}, last synced ${new Date(share.local_sync_at.replace(' ', 'T') + 'Z').toLocaleString()}`
+                            : 'waiting for first sync'}
+                        </span>
+                        {share.local_pending_uploads > 0 && <span>⏳ {share.local_pending_uploads} upload{share.local_pending_uploads !== 1 ? 's' : ''} waiting for Immich</span>}
+                        {share.local_sync_error && <span title={share.local_sync_error}>⚠ {share.local_sync_error}</span>}
+                        <button type="button" className="btn btn-secondary btn-sm" disabled={share.local_syncing} onClick={() => syncNow(share)} style={{ padding: '2px 8px', fontSize: '0.7rem' }}>Sync now</button>
+                      </div>
+                    ) : null}
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                       <div style={{
