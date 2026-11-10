@@ -636,6 +636,7 @@ function ShareModal({ onClose, onSaved, editShare }) {
     show_metadata: editShare?.show_metadata || false,
     show_location: editShare?.show_location || false,
     local_sync: !!editShare?.local_sync,
+    zip_split: !!editShare?.zip_split,
     local_sync_max_gb: editShare?.local_sync_max_gb ?? '',
     upload_tag_ids: existingTagIds,
     watch_tag_ids: editShare?.watch_tag_ids
@@ -704,6 +705,7 @@ function ShareModal({ onClose, onSaved, editShare }) {
             show_metadata: form.show_metadata,
             show_location: form.show_metadata && form.show_location,
             local_sync: form.local_sync,
+            zip_split: form.zip_split,
             local_sync_max_gb: form.local_sync_max_gb === '' ? null : form.local_sync_max_gb,
             upload_tag_ids: uploadTagIdsStr,
             slug: form.slug,
@@ -726,6 +728,7 @@ function ShareModal({ onClose, onSaved, editShare }) {
             show_metadata: form.show_metadata,
             show_location: form.show_metadata && form.show_location,
             local_sync: form.local_sync,
+            zip_split: form.zip_split,
             local_sync_max_gb: form.local_sync_max_gb === '' ? undefined : form.local_sync_max_gb,
             upload_tag_ids: uploadTagIdsStr,
             slug: form.slug || undefined,
@@ -943,6 +946,9 @@ function ShareModal({ onClose, onSaved, editShare }) {
                 <CheckBox checked={form.show_location} onChange={v => set('show_location', v)} label="Include location (GPS)" />
               )}
               <CheckBox checked={form.local_sync} onChange={v => set('local_sync', v)} label="Keep synced locally" />
+              {form.allow_download && (
+                <CheckBox checked={form.zip_split} onChange={v => set('zip_split', v)} label="Split ZIP downloads into ~2 GB parts" />
+              )}
             </div>
             {form.local_sync && (
               <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: '-6px 0 16px', lineHeight: 1.5 }}>

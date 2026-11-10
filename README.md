@@ -190,6 +190,9 @@ Tick **Keep synced locally** on a share to copy its album (thumbnails, previews 
 - **Size limits:** set a **total cache limit** under Settings → Local Sync Cache (0 = unlimited) and, optionally, a **per-share limit** when editing a share (handy for one 10–20 GB album while others stay small). Both are changeable at any time. Thumbnails and previews are always cached; once a limit is reached, remaining originals are served from Immich instead. Lowering a limit deletes cached originals (newest first) until it fits; raising it fills in the rest on the next sync.
 - **Storage:** files live under `/app/data/cache` (inside the `immich-share-data` volume). Turning local sync off, deleting the share or removing assets frees the space. Size ≈ the full size of the album's originals, so check free disk space first.
 
+### ZIP Downloads
+By default, "download all" produces **one ZIP** (ZIP64, so no size limit from the format). Tick **Split ZIP downloads into ~2 GB parts** on a share to get several smaller ZIPs (max ~2 GB / 500 files each) instead, which is easier on flaky connections and proxies with request timeouts.
+
 ### Notifications
 Configure SMTP settings globally, then choose which events trigger alerts under **Settings → Notification Triggers**:
 

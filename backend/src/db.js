@@ -166,6 +166,11 @@ function initDb() {
   if (!cols.includes('local_sync_error')) {
     db.exec(`ALTER TABLE shares ADD COLUMN local_sync_error TEXT`);
   }
+  // Split ZIP downloads into ~2 GB parts (off = one single ZIP)
+  if (!cols.includes('zip_split')) {
+    db.exec(`ALTER TABLE shares ADD COLUMN zip_split INTEGER DEFAULT 0`);
+    console.log('✅ shares.zip_split column added');
+  }
   // Optional per-share cache cap in GB (null = no per-share cap)
   if (!cols.includes('local_sync_max_gb')) {
     db.exec(`ALTER TABLE shares ADD COLUMN local_sync_max_gb REAL`);

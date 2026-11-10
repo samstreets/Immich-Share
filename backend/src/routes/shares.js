@@ -103,7 +103,7 @@ router.get('/', (req, res) => {
     SELECT id, slug, name, description, share_type, immich_album_id, immich_tag_id,
            expires_at, allow_download, allow_upload, show_metadata, show_location,
            upload_tag_ids, watch_tag_ids,
-           local_sync, local_sync_at, local_sync_error, local_sync_max_gb,
+           local_sync, local_sync_at, local_sync_error, local_sync_max_gb, zip_split,
            access_token, max_views, webhook_url, notify_email,
            view_count, created_at, updated_at, is_active
     FROM shares ${where} ORDER BY created_at DESC
@@ -293,6 +293,7 @@ router.post('/', async (req, res) => {
     show_location,
     local_sync,
     local_sync_max_gb,
+    zip_split,
     upload_tag_ids: rawUploadTagIds,
     watch_tag_ids: rawWatchTagIds,
     slug: rawSlug,
@@ -363,8 +364,8 @@ router.post('/', async (req, res) => {
       INSERT INTO shares (
         id, slug, name, description, share_type, immich_album_id, immich_tag_id,
         password_hash, expires_at, allow_download, allow_upload, show_metadata, show_location,
-        upload_tag_ids, watch_tag_ids, max_views, webhook_url, notify_email, local_sync, local_sync_max_gb
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        upload_tag_ids, watch_tag_ids, max_views, webhook_url, notify_email, local_sync, local_sync_max_gb, zip_split
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id, slug, name, description || null, share_type,
       immich_album_id || null,
@@ -382,6 +383,7 @@ router.post('/', async (req, res) => {
       notify_email || null,
       local_sync ? 1 : 0,
       cacheCap,
+      zip_split ? 1 : 0,
     );
   } catch (err) {
     if (err.message.includes('UNIQUE constraint failed: shares.slug')) {
@@ -408,7 +410,7 @@ router.patch('/:id', async (req, res) => {
 
   const {
     name, description, password, expires_at,
-    allow_download, allow_upload, show_metadata, show_location, is_active, local_sync, local_sync_max_gb,
+    allow_download, allow_upload, show_metadata, show_location, is_active, local_sync, local_sync_max_gb, zip_split,
     upload_tag_ids: rawUploadTagIds,
     watch_tag_ids: rawWatchTagIds,
     slug: rawSlug,
@@ -459,6 +461,7 @@ router.patch('/:id', async (req, res) => {
   const updatedLocation    = show_location !== undefined ? (show_location ? 1 : 0) : share.show_location;
   const updatedActive      = is_active !== undefined ? (is_active ? 1 : 0) : share.is_active;
   const updatedLocalSync   = local_sync !== undefined ? (local_sync ? 1 : 0) : share.local_sync;
+  const updatedZipSplit    = zip_split !== undefined ? (zip_split ? 1 : 0) : share.zip_split;
   const updatedCacheCap    = local_sync_max_gb !== undefined ? parseCap(local_sync_max_gb) : share.local_sync_max_gb;
   if (updatedCacheCap === undefined) return res.status(400).json({ error: 'Cache size limit must be a positive number of GB or empty' });
   const updatedWebhook     = webhook_url !== undefined ? (webhook_url || null) : share.webhook_url;
@@ -498,6 +501,7 @@ router.patch('/:id', async (req, res) => {
         notify_email = ?,
         local_sync = ?,
         local_sync_max_gb = ?,
+        zip_split = ?,
         updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).run(
@@ -505,7 +509,7 @@ router.patch('/:id', async (req, res) => {
       updatedExpiresAt, updatedDownload, updatedUpload, updatedMetadata, updatedLocation,
       updatedExpiresAt, updatedExpiresAt,
       updatedUploadTagIds, updatedWatchTagIds, updatedActive,
-      maxViews, updatedWebhook, updatedEmail, updatedLocalSync, updatedCacheCap,
+      maxViews, updatedWebhook, updatedEmail, updatedLocalSync, updatedCacheCap, updatedZipSplit,
       req.params.id
     );
   } catch (err) {
