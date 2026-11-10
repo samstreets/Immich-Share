@@ -278,9 +278,14 @@ async function loadZipAssets(share, idsParam) {
 
 // Greedily group assets into parts bounded by size and file count.
 // Each entry keeps its index in the full list so filenames stay unique across parts.
-function planZipParts(assets) {
+function planZipParts(assets, split) {
   const parts = [];
   let cur = null;
+  if (!split) {
+    // Single ZIP (ZIP64, so size/file count aren't limited by the format)
+    const bytes = assets.reduce((n, a) => n + (Number(a.exifInfo?.fileSizeInByte) || UNKNOWN_SIZE_GUESS), 0);
+    return assets.length ? [{ items: assets.map((asset, index) => ({ asset, index })), bytes }] : [];
+  }
   assets.forEach((asset, index) => {
     const size = Number(asset.exifInfo?.fileSizeInByte) || UNKNOWN_SIZE_GUESS;
     if (!cur || cur.items.length >= ZIP_PART_MAX_FILES || (cur.bytes + size > ZIP_PART_MAX_BYTES && cur.items.length > 0)) {
@@ -307,7 +312,7 @@ router.get('/zip-plan/:id', async (req, res) => {
   const share = authZipRequest(req, res);
   if (!share) return;
   try {
-    const parts = planZipParts(await loadZipAssets(share, req.query.ids));
+    const parts = planZipParts(await loadZipAssets(share, req.query.ids), share.zip_split === 1);
     res.json({ parts: parts.map((p, i) => ({ part: i + 1, count: p.items.length, bytes: p.bytes })) });
   } catch (err) {
     res.status(502).send(`Failed to plan download: ${err.message}`);
@@ -319,7 +324,7 @@ router.get('/zip/:id', async (req, res) => {
   if (!share) return;
 
   try {
-    const parts = planZipParts(await loadZipAssets(share, req.query.ids));
+    const parts = planZipParts(await loadZipAssets(share, req.query.ids), share.zip_split === 1);
     const partNum = req.query.part ? parseInt(req.query.part, 10) : (parts.length === 1 ? 1 : 0);
     if (!partNum && parts.length > 1) return res.status(400).send('This share is split into parts; specify ?part=N');
     if (!(partNum >= 1 && partNum <= parts.length)) return res.status(404).send('No assets found');
