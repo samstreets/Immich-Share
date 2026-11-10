@@ -10,6 +10,10 @@ on:
     branches:
       - main
 
+# Least privilege by default; jobs only need to read the repo
+permissions:
+  contents: read
+
 env:
   IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/immich-share
 

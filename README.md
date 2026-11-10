@@ -64,6 +64,7 @@ Settings can be configured via **environment variables** (seed on first boot) **
 | `ADMIN_PASSWORD` | No | Initial admin password (first run only, min 8 chars). If unset or weak, a random one is generated and logged once |
 | `PORT` | No | Port to listen on (default: `3000`) |
 | `DB_PATH` | No | Path to SQLite database (default: `/app/data/app.db`) |
+| `TRUST_PROXY` | No | Number of reverse proxies in front of the app (default: `1`). Set to `0` if the port is exposed directly — otherwise clients can spoof `X-Forwarded-For` and bypass the login rate limits |
 | `ALLOWED_ORIGINS` | No | Newline-separated list of allowed CORS origins (empty = allow all) |
 | `SMTP_HOST` | No | SMTP server hostname for email notifications |
 | `SMTP_PORT` | No | SMTP port (default: `587`) |

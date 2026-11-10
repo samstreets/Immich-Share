@@ -13,7 +13,14 @@ function isPrivateIp(ip) {
       (a === 192 && b === 168) || a >= 224;
   }
   const v = ip.toLowerCase();
-  if (v.startsWith('::ffff:')) return isPrivateIp(v.slice(7));
+  // IPv4-mapped / NAT64 addresses reach an IPv4 host: check the embedded address.
+  // The URL parser rewrites ::ffff:127.0.0.1 to the hex form ::ffff:7f00:1.
+  const mapped = v.match(/^(?:::ffff:|64:ff9b::)(?:(\d+\.\d+\.\d+\.\d+)|([0-9a-f]{1,4}):([0-9a-f]{1,4}))$/);
+  if (mapped) {
+    if (mapped[1]) return isPrivateIp(mapped[1]);
+    const hi = parseInt(mapped[2], 16), lo = parseInt(mapped[3], 16);
+    return isPrivateIp(`${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`);
+  }
   return v === '::' || v === '::1' || v.startsWith('fc') || v.startsWith('fd') ||
     v.startsWith('fe8') || v.startsWith('fe9') || v.startsWith('fea') || v.startsWith('feb');
 }

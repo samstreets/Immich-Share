@@ -1,4 +1,6 @@
 const express = require('express');
+const { pipeline } = require('stream');
+const { asyncRouter } = require('../asyncRoutes');
 const { getDb } = require('../db');
 const { proxyAssetThumbnail, proxyAssetOriginal, proxyAssetVideo } = require('../immich');
 const { verifyToken } = require('../shareSession');
@@ -7,25 +9,15 @@ const { isLocalReady, localHasAsset, getCachedFile, sendCached } = require('../l
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-const router = express.Router();
-
-function validateSession(shareId, token) {
-  if (!token) return false;
-  if (!verifyToken(shareId, token)) return false;
-  // Also confirm share is still active
-  const db = getDb();
-  const share = db.prepare('SELECT is_active, expires_at FROM shares WHERE id = ?').get(shareId);
-  if (!share || !share.is_active) return false;
-  if (share.expires_at && new Date(share.expires_at) < new Date()) return false;
-  return true;
-}
+const router = asyncRouter();
 
 // Session valid AND asset belongs to this share. Returns the share row or null.
 async function authorizeAsset(shareId, assetId, token) {
   if (!UUID_RE.test(assetId)) return null;
-  if (!validateSession(shareId, token)) return null;
-  const share = getShare(shareId);
-  if (!share) return null;
+  const share = getDb().prepare('SELECT * FROM shares WHERE id = ?').get(shareId);
+  if (!share || !share.is_active) return null;
+  if (share.expires_at && new Date(share.expires_at) < new Date()) return null;
+  if (!verifyToken(share, token)) return null;
   // Local-sync shares answer from the cache, so they keep working if Immich is unreachable
   if (isLocalReady(share) && localHasAsset(share.id, assetId)) return share;
   try {
@@ -36,9 +28,11 @@ async function authorizeAsset(shareId, assetId, token) {
   return share;
 }
 
-function getShare(shareId) {
-  const db = getDb();
-  return db.prepare('SELECT * FROM shares WHERE id = ?').get(shareId);
+// Stream an upstream response to the client. Tears both sides down if either
+// fails, so a dropped client doesn't leave the Immich download running and a
+// dropped Immich connection doesn't leave the client hanging.
+function pipeUpstream(upstream, res) {
+  pipeline(upstream.body, res, () => {});
 }
 
 // ── Thumbnail ─────────────────────────────────────────────────────────────────
@@ -56,7 +50,7 @@ router.get('/thumbnail/:shareId/:assetId', async (req, res) => {
     const upstream = await proxyAssetThumbnail(assetId, 'thumbnail');
     res.set('Content-Type', upstream.headers.get('content-type') || 'image/jpeg');
     res.set('Cache-Control', 'private, max-age=86400');
-    upstream.body.pipe(res);
+    pipeUpstream(upstream, res);
   } catch (err) {
     res.status(502).send('Upstream error');
   }
@@ -77,7 +71,7 @@ router.get('/preview/:shareId/:assetId', async (req, res) => {
     const upstream = await proxyAssetThumbnail(assetId, 'preview');
     res.set('Content-Type', upstream.headers.get('content-type') || 'image/jpeg');
     res.set('Cache-Control', 'private, max-age=86400');
-    upstream.body.pipe(res);
+    pipeUpstream(upstream, res);
   } catch (err) {
     res.status(502).send('Upstream error');
   }
@@ -105,7 +99,7 @@ router.get('/original/:shareId/:assetId', async (req, res) => {
     if (cd) res.set('Content-Disposition', cd);
     else res.set('Content-Disposition', 'attachment');
     res.set('Cache-Control', 'private, max-age=3600');
-    upstream.body.pipe(res);
+    pipeUpstream(upstream, res);
   } catch (err) {
     res.status(502).send('Upstream error');
   }
@@ -121,7 +115,13 @@ router.get('/video/:shareId/:assetId', async (req, res) => {
   // Cached original supports Range natively (Express sendFile)
   if (share.local_sync) {
     const cached = getCachedFile(share.id, assetId, 'original');
-    if (cached) return sendCached(res, cached);
+    if (cached) {
+      // This route streams the full original. Only do that for videos — for a
+      // photo it would hand out the original file (EXIF/GPS included) even on
+      // shares where downloads are switched off.
+      if (!cached.isVideo && !share.allow_download) return res.status(403).send('Not a video');
+      return sendCached(res, cached);
+    }
   }
   try {
     // Forward the Range header to Immich so seeking works
@@ -146,7 +146,7 @@ router.get('/video/:shareId/:assetId', async (req, res) => {
     }
     res.set('Cache-Control', 'private, max-age=3600');
 
-    upstream.body.pipe(res);
+    pipeUpstream(upstream, res);
   } catch (err) {
     res.status(502).send('Upstream error');
   }

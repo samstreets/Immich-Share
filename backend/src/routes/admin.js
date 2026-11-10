@@ -1,11 +1,12 @@
 const express = require('express');
+const { asyncRouter } = require('../asyncRoutes');
 const { getDb } = require('../db');
 const { requireAuth } = require('../middleware/auth');
 const { getAlbums, getAlbum, getAlbumAssets, getTags, testConnection, createAlbum, createTag, tagAssets } = require('../immich');
 const { sendEmail, fireWebhook } = require('../notifications');
 const { assertSafeWebhookUrl } = require('../urlGuard');
 
-const router = express.Router();
+const router = asyncRouter();
 router.use(requireAuth);
 
 // Get all settings (sensitive keys masked)
@@ -61,7 +62,17 @@ router.put('/settings', async (req, res) => {
     }
   });
 
-  const updates = Object.entries(req.body).filter(([k]) => allowed.includes(k));
+  const updates = Object.entries(req.body || {})
+    .filter(([k, v]) => allowed.includes(k) && ['string', 'number', 'boolean'].includes(typeof v))
+    .map(([k, v]) => [k, String(v)]);
+  const immichUrl = updates.find(([k]) => k === 'immich_url');
+  if (immichUrl && immichUrl[1]) {
+    let u;
+    try { u = new URL(immichUrl[1]); } catch { return res.status(400).json({ error: 'Immich URL is not a valid URL' }); }
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+      return res.status(400).json({ error: 'Immich URL must start with http:// or https://' });
+    }
+  }
   const limitUpdate = updates.find(([k]) => k === 'cache_max_gb');
   if (limitUpdate) {
     const n = Number(limitUpdate[1]);
@@ -307,8 +318,10 @@ router.get('/logs/export', (req, res) => {
   const cols = ['id', 'share_id', 'share_name', 'ip_address', 'user_agent', 'action', 'accessed_at'];
   const escape = (val) => {
     if (val == null) return '';
-    const s = String(val);
-    if (s.includes(',') || s.includes('"') || s.includes('\n')) {
+    let s = String(val);
+    // Neutralise spreadsheet formulas: the user agent column is attacker-controlled
+    if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+    if (s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r')) {
       return '"' + s.replace(/"/g, '""') + '"';
     }
     return s;

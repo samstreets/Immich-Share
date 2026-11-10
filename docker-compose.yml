@@ -22,6 +22,11 @@ services:
       # one is generated and printed once in the container logs.
       # ADMIN_PASSWORD: choose-a-strong-password
 
+      # Number of reverse proxies in front of the app (default 1). Set to 0 if
+      # port 3000 is reachable directly, so clients can't spoof their IP via
+      # X-Forwarded-For to get around the login rate limits.
+      # TRUST_PROXY: "0"
+
       # Allow webhooks to target private/LAN addresses (blocked by default)
       # ALLOW_PRIVATE_WEBHOOKS: "true"
 

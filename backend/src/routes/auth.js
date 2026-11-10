@@ -1,9 +1,10 @@
 require('dotenv').config();
 const express = require('express');
+const { asyncRouter } = require('../asyncRoutes');
 const bcrypt = require('bcryptjs');
 const { getDb } = require('../db');
 
-const router = express.Router();
+const router = asyncRouter();
 
 function verifyCode(authenticator, code, secret) {
   try {
@@ -13,7 +14,11 @@ function verifyCode(authenticator, code, secret) {
   }
 }
 
-const { requireAuth, signToken, signPreAuthToken, verifyToken } = require('../middleware/auth');
+const { requireAuth, signToken, signPreAuthToken, verifyToken, credentialVersion } = require('../middleware/auth');
+
+const isStr = (v) => typeof v === 'string' && v.length > 0 && v.length <= 1024;
+// Compared against when the username is unknown, so response time doesn't reveal which usernames exist
+const DUMMY_HASH = bcrypt.hashSync('immich-share-dummy-password', 12);
 
 // POST /api/auth/login
 // If TOTP is enabled the response includes { totpRequired: true } and a
@@ -21,35 +26,31 @@ const { requireAuth, signToken, signPreAuthToken, verifyToken } = require('../mi
 // must then call POST /api/auth/totp-verify with that pre-auth token + code.
 router.post('/login', async (req, res) => {
   const { username, password } = req.body;
-  if (!username || !password) {
+  if (!isStr(username) || !isStr(password)) {
     return res.status(400).json({ error: 'Username and password required' });
   }
 
   const db = getDb();
   const user = db.prepare('SELECT * FROM admin_users WHERE username = ?').get(username);
-  if (!user) {
-    return res.status(401).json({ error: 'Invalid credentials' });
-  }
-
-  const valid = await bcrypt.compare(password, user.password_hash);
-  if (!valid) {
+  const valid = await bcrypt.compare(password, user ? user.password_hash : DUMMY_HASH);
+  if (!user || !valid) {
     return res.status(401).json({ error: 'Invalid credentials' });
   }
 
   if (user.totp_enabled && user.totp_secret) {
     // Issue a short-lived pre-auth token so the TOTP step can be authenticated
-    const preToken = signPreAuthToken({ id: user.id, username: user.username });
+    const preToken = signPreAuthToken(user);
     return res.json({ totpRequired: true, preToken });
   }
 
-  const token = signToken({ id: user.id, username: user.username });
+  const token = signToken(user);
   res.json({ token, username: user.username });
 });
 
 // POST /api/auth/totp-verify  — second factor after password
 router.post('/totp-verify', (req, res) => {
   const { preToken, code } = req.body;
-  if (!preToken || !code) {
+  if (!isStr(preToken) || !['string', 'number'].includes(typeof code) || !code) {
     return res.status(400).json({ error: 'preToken and code are required' });
   }
 
@@ -69,6 +70,10 @@ router.post('/totp-verify', (req, res) => {
   if (!user || !user.totp_secret) {
     return res.status(401).json({ error: 'TOTP not configured' });
   }
+  // Password changed since the first step → the pre-auth token is stale
+  if (payload.cv !== credentialVersion(user)) {
+    return res.status(401).json({ error: 'Pre-auth token invalid or expired' });
+  }
 
   let authenticator;
   try { authenticator = require('otplib').authenticator; } catch {
@@ -82,7 +87,7 @@ router.post('/totp-verify', (req, res) => {
     return res.status(401).json({ error: 'Invalid TOTP code' });
   }
 
-  const token = signToken({ id: user.id, username: user.username });
+  const token = signToken(user);
   res.json({ token, username: user.username });
 });
 
@@ -148,13 +153,14 @@ router.post('/totp-confirm', requireAuth, (req, res) => {
   }
 
   db.prepare('UPDATE admin_users SET totp_enabled = 1 WHERE id = ?').run(user.id);
-  res.json({ message: 'TOTP enabled successfully' });
+  // Credentials changed → older tokens stop working; hand this session a fresh one
+  res.json({ message: 'TOTP enabled successfully', token: signToken({ ...user, totp_enabled: 1 }) });
 });
 
 // POST /api/auth/totp-disable
 router.post('/totp-disable', requireAuth, async (req, res) => {
   const { password } = req.body;
-  if (!password) return res.status(400).json({ error: 'Current password is required to disable TOTP' });
+  if (!isStr(password)) return res.status(400).json({ error: 'Current password is required to disable TOTP' });
 
   const db = getDb();
   const user = db.prepare('SELECT * FROM admin_users WHERE id = ?').get(req.admin.id);
@@ -164,7 +170,7 @@ router.post('/totp-disable', requireAuth, async (req, res) => {
   if (!valid) return res.status(401).json({ error: 'Incorrect password' });
 
   db.prepare('UPDATE admin_users SET totp_secret = NULL, totp_enabled = 0 WHERE id = ?').run(user.id);
-  res.json({ message: 'TOTP disabled' });
+  res.json({ message: 'TOTP disabled', token: signToken({ ...user, totp_secret: null, totp_enabled: 0 }) });
 });
 
 // GET /api/auth/totp-status
@@ -177,7 +183,7 @@ router.get('/totp-status', requireAuth, (req, res) => {
 // POST /api/auth/change-password
 router.post('/change-password', requireAuth, async (req, res) => {
   const { currentPassword, newPassword } = req.body;
-  if (!currentPassword || !newPassword) {
+  if (!isStr(currentPassword) || !isStr(newPassword)) {
     return res.status(400).json({ error: 'Both current and new passwords are required' });
   }
   if (newPassword.length < 8) {
@@ -192,12 +198,14 @@ router.post('/change-password', requireAuth, async (req, res) => {
 
   const valid = await bcrypt.compare(currentPassword, user.password_hash);
   if (!valid) {
-    return res.status(401).json({ error: 'Current password is incorrect' });
+    // 403, not 401: the session itself is fine (the admin UI signs out on 401)
+    return res.status(403).json({ error: 'Current password is incorrect' });
   }
 
   const hash = await bcrypt.hash(newPassword, 12);
   db.prepare('UPDATE admin_users SET password_hash = ? WHERE id = ?').run(hash, user.id);
-  res.json({ message: 'Password updated successfully' });
+  // Every other session is logged out by the change; keep this one signed in
+  res.json({ message: 'Password updated successfully', token: signToken({ ...user, password_hash: hash }) });
 });
 
 // GET /api/auth/me

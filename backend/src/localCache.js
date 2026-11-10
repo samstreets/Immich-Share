@@ -336,14 +336,16 @@ function getCachedFile(shareId, assetId, kind) {
     // The raw upload doubles as its own thumbnail/preview until Immich has generated real ones
     if (kind !== 'original' && !String(pending.mime || '').startsWith('image/')) return null;
     const p = pendingFile(pending.id);
-    return fs.existsSync(p) ? { path: p, mime: pending.mime || 'application/octet-stream', filename: pending.filename } : null;
+    return fs.existsSync(p)
+      ? { path: p, mime: pending.mime || 'application/octet-stream', filename: pending.filename, isVideo: String(pending.mime || '').startsWith('video/') }
+      : null;
   }
   const row = db.prepare('SELECT * FROM cached_assets WHERE asset_id = ?').get(assetId);
   if (!row || !KINDS[kind]) return null;
   const p = assetFile(assetId, kind);
   if (!fs.existsSync(p)) return null;
   const fallback = kind === 'original' ? 'application/octet-stream' : 'image/jpeg';
-  return { path: p, mime: row[KINDS[kind].mimeCol] || fallback, filename: row.filename };
+  return { path: p, mime: row[KINDS[kind].mimeCol] || fallback, filename: row.filename, isVideo: row.type === 'VIDEO' };
 }
 
 /** Asset list for a share from the local cache (synced assets + pending uploads). */
@@ -376,7 +378,12 @@ function listLocalAssets(share) {
 
 /** Stream an asset's cached file with Range support. Returns false if not cached. */
 function sendCached(res, file, { download = false } = {}) {
-  const headers = { 'Content-Type': file.mime, 'Cache-Control': 'private, max-age=3600' };
+  const headers = {
+    'Content-Type': file.mime,
+    'Cache-Control': 'private, max-age=3600',
+    // Uploaded files (e.g. SVG) must never run script on this origin
+    'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+  };
   if (download) {
     const name = (file.filename || 'download').replace(/[\r\n"\\]/g, '_');
     headers['Content-Disposition'] = `attachment; filename="${name.replace(/[^\x20-\x7e]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(name)}`;

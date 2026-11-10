@@ -118,7 +118,7 @@ function UrlListEditor({ value, onChange }) {
 // Uses raw fetch (not useApi) so a 401 shows an error message instead of
 // silently logging the user out mid-flow.
 function TotpPanel() {
-  const { token } = useAuth()
+  const { token, username, login } = useAuth()
   const [status, setStatus] = useState(null)
   const [enrollData, setEnrollData] = useState(null)
   const [confirmCode, setConfirmCode] = useState('')
@@ -168,7 +168,9 @@ function TotpPanel() {
     e.preventDefault()
     setLoading(true); setMsg(null)
     try {
-      await totpFetch('/auth/totp-confirm', { method: 'POST', body: { code: confirmCode } })
+      const d = await totpFetch('/auth/totp-confirm', { method: 'POST', body: { code: confirmCode } })
+      // Changing 2FA invalidates older sessions; the server returns a fresh token for this one
+      if (d.token) login(d.token, username)
       setMsg({ type: 'success', text: '✅ Two-factor authentication enabled! You will need your authenticator app on next login.' })
       setEnrollData(null); setConfirmCode('')
       loadStatus()
@@ -181,7 +183,8 @@ function TotpPanel() {
     e.preventDefault()
     setLoading(true); setMsg(null)
     try {
-      await totpFetch('/auth/totp-disable', { method: 'POST', body: { password: disablePassword } })
+      const d = await totpFetch('/auth/totp-disable', { method: 'POST', body: { password: disablePassword } })
+      if (d.token) login(d.token, username)
       setMsg({ type: 'success', text: 'Two-factor authentication disabled.' })
       setShowDisable(false); setDisablePassword('')
       loadStatus()
@@ -373,6 +376,7 @@ const EyeIcon = ({ visible }) => visible
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function SettingsPage() {
   const api = useApi()
+  const auth = useAuth()
   const [loading, setLoading] = useState(true)
 
   // Immich
@@ -510,7 +514,9 @@ export default function SettingsPage() {
     if (pwForm.newPassword.length < 8) { setPwMsg({ type: 'error', text: 'Password must be at least 8 characters.' }); return }
     setPwSaving(true)
     try {
-      await api('/auth/change-password', { method: 'POST', body: { currentPassword: pwForm.currentPassword, newPassword: pwForm.newPassword } })
+      const d = await api('/auth/change-password', { method: 'POST', body: { currentPassword: pwForm.currentPassword, newPassword: pwForm.newPassword } })
+      // Changing the password signs out every other session; keep this one going
+      if (d.token) auth.login(d.token, auth.username)
       setPwMsg({ type: 'success', text: 'Password changed successfully.' })
       setPwForm({ currentPassword: '', newPassword: '', confirmPassword: '' })
     } catch (err) { setPwMsg({ type: 'error', text: err.message }) }
