@@ -64,7 +64,8 @@ jobs:
           # Separate cache scopes per platform so arm64 and amd64 layers never
           # evict each other from the shared GHA cache.
           cache-from: type=gha,scope=build-${{ steps.platform.outputs.key }}
-          cache-to:   type=gha,mode=max,scope=build-${{ steps.platform.outputs.key }}
+          # ignore-error: a read-only token (e.g. a PR run racing its own merge) must not fail the build
+          cache-to:   type=gha,mode=max,ignore-error=true,scope=build-${{ steps.platform.outputs.key }}
 
       - name: Export digest
         if: github.event_name != 'pull_request'
