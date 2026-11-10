@@ -7,6 +7,9 @@ const { getDb } = require('../db');
 const { getAlbumAssets, getAssetsByTag, proxyAssetOriginal, tagAssets } = require('../immich');
 const { makeToken, verifyToken } = require('../shareSession');
 const { notifyUpload, notifyEvent } = require('../notifications');
+const {
+  isLocalReady, listLocalAssets, getCachedFile, enqueueUpload, processPending,
+} = require('../localCache');
 
 const router = express.Router();
 
@@ -217,7 +220,10 @@ router.post('/content/:id', async (req, res) => {
 
   try {
     let assets = [];
-    if (share.share_type === 'album') {
+    if (isLocalReady(share)) {
+      // Served from the local cache: no round-trip to Immich
+      assets = listLocalAssets(share);
+    } else if (share.share_type === 'album') {
       assets = await getAlbumAssets(share.immich_album_id, { withExif: share.show_metadata === 1 });
     } else if (share.share_type === 'tag') {
       assets = await getAssetsByTag(share.immich_tag_id, { withExif: share.show_metadata === 1 });
@@ -230,6 +236,7 @@ router.post('/content/:id', async (req, res) => {
       fileCreatedAt: share.show_metadata ? a.fileCreatedAt : undefined,
       exifInfo: share.show_metadata ? sanitizeExif(a.exifInfo, share.show_location === 1) : undefined,
       duration: a.duration,
+      pending: a.pending || undefined,
       thumbnailUrl: `/api/proxy/thumbnail/${share.id}/${a.id}`,
       previewUrl:   `/api/proxy/preview/${share.id}/${a.id}`,
       originalUrl:  share.allow_download ? `/api/proxy/original/${share.id}/${a.id}` : undefined,
@@ -250,7 +257,9 @@ const UNKNOWN_SIZE_GUESS = 20 * 1024 * 1024;
 // Resolve the assets for a zip request (optionally filtered by ?ids=) in a stable order.
 async function loadZipAssets(share, idsParam) {
   let assets = [];
-  if (share.share_type === 'album') {
+  if (isLocalReady(share)) {
+    assets = listLocalAssets(share);
+  } else if (share.share_type === 'album') {
     assets = await getAlbumAssets(share.immich_album_id, { withExif: true });
   } else if (share.share_type === 'tag') {
     assets = await getAssetsByTag(share.immich_tag_id, { withExif: true });
@@ -431,15 +440,16 @@ router.get('/zip/:id', async (req, res) => {
       if (clientGone) return;
       const asset = assets[i];
       const name = asset.originalFileName || asset.id;
-      let upstream;
+      let body;
       try {
-        upstream = await proxyAssetOriginal(asset.id);
+        const cached = share.local_sync ? getCachedFile(share.id, asset.id, 'original') : null;
+        body = cached ? fs.createReadStream(cached.path) : (await proxyAssetOriginal(asset.id)).body;
       } catch (err) {
         console.error(`[zip] Skipping asset ${asset.id}: ${err.message}`);
         skipped.push(`${String(items[i].index + 1).padStart(4, '0')}_${name}`);
         continue;
       }
-      await addEntry(`${String(items[i].index + 1).padStart(4, '0')}_${name}`, upstream.body);
+      await addEntry(`${String(items[i].index + 1).padStart(4, '0')}_${name}`, body);
     }
 
     // Tell the downloader about files that couldn't be included instead of failing silently.
@@ -736,6 +746,23 @@ router.post('/upload-assemble/:id', async (req, res) => {
       return res.status(400).json({ error: `Missing chunk ${i} of ${meta.totalChunks}. Please retry the upload.` });
     }
     chunkFiles.push(p);
+  }
+
+  // Local-sync shares: keep the file on this server first, then forward to Immich
+  // in the background (retried if Immich is unreachable).
+  if (share.local_sync) {
+    try {
+      const pendingId = await enqueueUpload(share, { chunkFiles, filename, fileCreatedAt, fileModifiedAt });
+      notifyUpload(share, { assetId: pendingId, filename, ip: req.ip }).catch(() => {});
+      logAccess(share, req, 'upload');
+      processPending();
+      return res.json({ success: true, assetId: pendingId, queued: true });
+    } catch (err) {
+      console.error('[upload-assemble] Local save failed:', err.message);
+      return res.status(500).json({ error: `Could not save upload: ${err.message}` });
+    } finally {
+      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+    }
   }
 
   // Stream the chunks from disk instead of loading the whole file into memory.

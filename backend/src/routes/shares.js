@@ -6,6 +6,7 @@ const { getDb } = require('../db');
 const { requireAuth } = require('../middleware/auth');
 const { assertSafeWebhookUrl } = require('../urlGuard');
 const { generateQR, matrixToSVG } = require('../qr');
+const { syncShare, isSyncing, purgeShareCache, sweepOrphans } = require('../localCache');
 
 const router = express.Router();
 
@@ -94,6 +95,7 @@ router.get('/', (req, res) => {
     SELECT id, slug, name, description, share_type, immich_album_id, immich_tag_id,
            expires_at, allow_download, allow_upload, show_metadata, show_location,
            upload_tag_ids, watch_tag_ids,
+           local_sync, local_sync_at, local_sync_error,
            access_token, max_views, webhook_url, notify_email,
            view_count, created_at, updated_at, is_active
     FROM shares ${where} ORDER BY created_at DESC
@@ -101,8 +103,18 @@ router.get('/', (req, res) => {
 
   const externalUrl = getExternalUrl(db);
 
+  const cachedCounts = new Map(db.prepare(
+    'SELECT share_id, COUNT(*) AS n FROM share_cached_assets GROUP BY share_id'
+  ).all().map(r => [r.share_id, r.n]));
+  const pendingCounts = new Map(db.prepare(
+    'SELECT share_id, COUNT(*) AS n FROM pending_uploads GROUP BY share_id'
+  ).all().map(r => [r.share_id, r.n]));
+
   const sharesWithLinks = shares.map(s => ({
     ...s,
+    local_cached_count: cachedCounts.get(s.id) || 0,
+    local_pending_uploads: pendingCounts.get(s.id) || 0,
+    local_syncing: isSyncing(s.id),
     shareUrl: shareUrl(externalUrl, s),
     passwordlessUrl: passwordlessUrl(externalUrl, s),
     isExpired: s.expires_at ? new Date(s.expires_at) < new Date() : false,
@@ -195,6 +207,7 @@ router.post('/bulk/delete', (req, res) => {
   const db = getDb();
   const placeholders = ids.map(() => '?').join(',');
   const result = db.prepare(`DELETE FROM shares WHERE id IN (${placeholders})`).run(...ids);
+  sweepOrphans();
   res.json({ deleted: result.changes });
 });
 
@@ -209,6 +222,16 @@ router.post('/bulk/toggle', (req, res) => {
     `UPDATE shares SET is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE id IN (${placeholders})`
   ).run(is_active ? 1 : 0, ...ids);
   res.json({ updated: result.changes });
+});
+
+// POST /shares/:id/sync  — start a local sync now (runs in the background)
+router.post('/:id/sync', (req, res) => {
+  if (!UUID_RE.test(req.params.id)) return res.status(400).json({ error: 'Invalid share id' });
+  const share = getDb().prepare('SELECT id, local_sync FROM shares WHERE id = ?').get(req.params.id);
+  if (!share) return res.status(404).json({ error: 'Share not found' });
+  if (!share.local_sync) return res.status(400).json({ error: 'Local sync is not enabled for this share' });
+  syncShare(share.id);
+  res.status(202).json({ message: 'Sync started' });
 });
 
 // POST /shares/:id/access-token  — generate or regenerate passwordless token
@@ -255,6 +278,7 @@ router.post('/', async (req, res) => {
     allow_upload,
     show_metadata,
     show_location,
+    local_sync,
     upload_tag_ids: rawUploadTagIds,
     watch_tag_ids: rawWatchTagIds,
     slug: rawSlug,
@@ -322,8 +346,8 @@ router.post('/', async (req, res) => {
       INSERT INTO shares (
         id, slug, name, description, share_type, immich_album_id, immich_tag_id,
         password_hash, expires_at, allow_download, allow_upload, show_metadata, show_location,
-        upload_tag_ids, watch_tag_ids, max_views, webhook_url, notify_email
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        upload_tag_ids, watch_tag_ids, max_views, webhook_url, notify_email, local_sync
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id, slug, name, description || null, share_type,
       immich_album_id || null,
@@ -339,6 +363,7 @@ router.post('/', async (req, res) => {
       maxViews,
       webhook_url || null,
       notify_email || null,
+      local_sync ? 1 : 0,
     );
   } catch (err) {
     if (err.message.includes('UNIQUE constraint failed: shares.slug')) {
@@ -346,6 +371,8 @@ router.post('/', async (req, res) => {
     }
     throw err;
   }
+
+  if (local_sync) syncShare(id);
 
   const externalUrl = getExternalUrl(db);
   const newShare = { id, slug, access_token: null };
@@ -363,7 +390,7 @@ router.patch('/:id', async (req, res) => {
 
   const {
     name, description, password, expires_at,
-    allow_download, allow_upload, show_metadata, show_location, is_active,
+    allow_download, allow_upload, show_metadata, show_location, is_active, local_sync,
     upload_tag_ids: rawUploadTagIds,
     watch_tag_ids: rawWatchTagIds,
     slug: rawSlug,
@@ -413,6 +440,7 @@ router.patch('/:id', async (req, res) => {
   const updatedMetadata    = show_metadata !== undefined ? (show_metadata ? 1 : 0) : share.show_metadata;
   const updatedLocation    = show_location !== undefined ? (show_location ? 1 : 0) : share.show_location;
   const updatedActive      = is_active !== undefined ? (is_active ? 1 : 0) : share.is_active;
+  const updatedLocalSync   = local_sync !== undefined ? (local_sync ? 1 : 0) : share.local_sync;
   const updatedWebhook     = webhook_url !== undefined ? (webhook_url || null) : share.webhook_url;
   const updatedEmail       = notify_email !== undefined ? (notify_email || null) : share.notify_email;
 
@@ -448,6 +476,7 @@ router.patch('/:id', async (req, res) => {
         max_views = ?,
         webhook_url = ?,
         notify_email = ?,
+        local_sync = ?,
         updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).run(
@@ -455,7 +484,7 @@ router.patch('/:id', async (req, res) => {
       updatedExpiresAt, updatedDownload, updatedUpload, updatedMetadata, updatedLocation,
       updatedExpiresAt, updatedExpiresAt,
       updatedUploadTagIds, updatedWatchTagIds, updatedActive,
-      maxViews, updatedWebhook, updatedEmail,
+      maxViews, updatedWebhook, updatedEmail, updatedLocalSync,
       req.params.id
     );
   } catch (err) {
@@ -464,6 +493,9 @@ router.patch('/:id', async (req, res) => {
     }
     throw err;
   }
+
+  if (share.local_sync && !updatedLocalSync) purgeShareCache(share.id);
+  else if (updatedLocalSync) syncShare(share.id);
 
   res.json({ message: 'Share updated' });
 });
@@ -476,6 +508,7 @@ router.delete('/:id', (req, res) => {
   const db = getDb();
   const result = db.prepare('DELETE FROM shares WHERE id = ?').run(req.params.id);
   if (result.changes === 0) return res.status(404).json({ error: 'Share not found' });
+  sweepOrphans();
   res.json({ message: 'Share deleted' });
 });
 

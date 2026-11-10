@@ -155,6 +155,59 @@ function initDb() {
     console.log('✅ shares.first_viewed_at column added');
   }
 
+  // Local sync: keep a share's media on this server's disk instead of proxying Immich every time
+  if (!cols.includes('local_sync')) {
+    db.exec(`ALTER TABLE shares ADD COLUMN local_sync INTEGER DEFAULT 0`);
+    console.log('✅ shares.local_sync column added');
+  }
+  if (!cols.includes('local_sync_at')) {
+    db.exec(`ALTER TABLE shares ADD COLUMN local_sync_at DATETIME`);
+  }
+  if (!cols.includes('local_sync_error')) {
+    db.exec(`ALTER TABLE shares ADD COLUMN local_sync_error TEXT`);
+  }
+
+  // One row per cached Immich asset (files live in CACHE_DIR/assets/<asset_id>/)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS cached_assets (
+      asset_id TEXT PRIMARY KEY,
+      type TEXT,
+      filename TEXT,
+      checksum TEXT,
+      orig_mime TEXT,
+      thumb_mime TEXT,
+      preview_mime TEXT,
+      meta TEXT,
+      cached_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  // Which shares include which cached assets (sort_order keeps Immich's ordering)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS share_cached_assets (
+      share_id TEXT NOT NULL,
+      asset_id TEXT NOT NULL,
+      sort_order INTEGER DEFAULT 0,
+      PRIMARY KEY (share_id, asset_id),
+      FOREIGN KEY (share_id) REFERENCES shares(id) ON DELETE CASCADE
+    )
+  `);
+  // Uploads saved locally and waiting to be forwarded to Immich
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS pending_uploads (
+      id TEXT PRIMARY KEY,
+      share_id TEXT NOT NULL,
+      filename TEXT NOT NULL,
+      mime TEXT,
+      size INTEGER DEFAULT 0,
+      file_created_at TEXT,
+      file_modified_at TEXT,
+      attempts INTEGER DEFAULT 0,
+      last_error TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (share_id) REFERENCES shares(id) ON DELETE CASCADE
+    )
+  `);
+
   // Share access logs
   db.exec(`
     CREATE TABLE IF NOT EXISTS access_logs (

@@ -13,6 +13,7 @@ A self-hosted web app that sits alongside your [Immich](https://immich.app) inst
 - ⬆ **Optional uploads** — let viewers contribute photos back to the album (chunked, no file-size limit)
 - 🏷 **Auto-tag uploads** — automatically apply Immich tags to every uploaded asset
 - 👀 **Album watcher** — periodically tags new assets added to watched albums
+- 💾 **Local sync** — keep an album's thumbnails, previews and originals on this server's disk; uploads are saved locally first, then forwarded to Immich
 - 🔗 **Custom slugs** — friendly URLs like `/s/summer-2024`
 - 🌐 **External URL config** — set the public URL used in share links
 - 🖼 **Lightbox viewer** — full-screen photo/video viewer with pinch-to-zoom, drag-to-pan, and keyboard navigation
@@ -74,6 +75,9 @@ Settings can be configured via **environment variables** (seed on first boot) **
 | `CLEANUP_INTERVAL_MS` | No | How often the cleanup job runs (default: 30 minutes) |
 | `MEDIA_RATE_LIMIT` | No | Max thumbnail/preview/download requests per IP per 15 min (default: 30000) |
 | `WATCH_INTERVAL_MS` | No | How often the album watcher runs (default: 5 minutes) |
+| `LOCAL_SYNC_INTERVAL_MS` | No | How often local-sync shares are re-synced with Immich and pending uploads retried (default: 5 minutes) |
+| `LOCAL_SYNC_CONCURRENCY` | No | Parallel file downloads during a sync (default: 3) |
+| `CACHE_DIR` | No | Where local-sync files are stored (default: `cache/` next to the database, i.e. `/app/data/cache`) |
 
 *These can be set via the Settings UI after first boot.
 
@@ -178,6 +182,13 @@ For album shares, configure "watch tags" — the watcher runs every 5 minutes an
 ### Photo Metadata
 Enable **Show metadata** on a share and viewers get an **Info** button (or press `i`) in the lightbox showing date taken, dimensions, file size, camera, lens and exposure. Only a fixed set of EXIF fields is ever sent to viewers. Location (city/country and a map link) is hidden unless you also tick **Include location (GPS)** on that share.
 
+### Local Sync
+Tick **Keep synced locally** on a share to copy its album (thumbnails, previews and original files) onto this server's disk. Viewers, downloads and ZIPs are then served from disk instead of going back to Immich on every request, and the share keeps working if Immich is temporarily unreachable.
+
+- **Sync:** runs on creation/enable, then every `LOCAL_SYNC_INTERVAL_MS` (default 5 min), or on demand with **Sync now**. New assets are downloaded, changed ones refreshed, and assets removed from the album are deleted from the cache. Until the first sync finishes the share is served from Immich as before; any file that failed to cache falls back to Immich.
+- **Uploads:** when uploads are enabled, a file is saved to the local cache first, shown in the gallery straight away, and forwarded to Immich in the background (added to the album and tagged as usual). If Immich is down it stays queued and is retried every cycle. Once Immich accepts it the local copy is kept as the cached original.
+- **Storage:** files live under `/app/data/cache` (inside the `immich-share-data` volume). Turning local sync off, deleting the share or removing assets frees the space. Size ≈ the full size of the album's originals, so check free disk space first.
+
 ### Notifications
 Configure SMTP settings globally, then choose which events trigger alerts under **Settings → Notification Triggers**:
 
@@ -267,7 +278,7 @@ docker run -p 3000:3000 \
 ## Data & Privacy
 
 - All share metadata is stored in a local **SQLite** database at `/app/data/app.db`
-- No photo data is stored — all media is proxied directly from your Immich instance
+- Photo data is not stored unless a share has **Keep synced locally** enabled; otherwise all media is proxied directly from your Immich instance
 - Share passwords are **bcrypt-hashed** (cost factor 10)
 - Admin passwords are bcrypt-hashed (cost factor 12)
 - Share session tokens are HMAC-SHA256 signed, valid for 8 hours
