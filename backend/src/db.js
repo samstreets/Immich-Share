@@ -166,6 +166,10 @@ function initDb() {
   if (!cols.includes('local_sync_error')) {
     db.exec(`ALTER TABLE shares ADD COLUMN local_sync_error TEXT`);
   }
+  // Optional per-share cache cap in GB (null = no per-share cap)
+  if (!cols.includes('local_sync_max_gb')) {
+    db.exec(`ALTER TABLE shares ADD COLUMN local_sync_max_gb REAL`);
+  }
 
   // One row per cached Immich asset (files live in CACHE_DIR/assets/<asset_id>/)
   db.exec(`
@@ -181,6 +185,10 @@ function initDb() {
       cached_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
+  const cachedCols = db.prepare("PRAGMA table_info(cached_assets)").all().map(c => c.name);
+  if (!cachedCols.includes('bytes')) {
+    db.exec(`ALTER TABLE cached_assets ADD COLUMN bytes INTEGER DEFAULT 0`);
+  }
   // Which shares include which cached assets (sort_order keeps Immich's ordering)
   db.exec(`
     CREATE TABLE IF NOT EXISTS share_cached_assets (
@@ -297,6 +305,8 @@ function initDb() {
     // Cleanup settings
     cleanup_expired_shares: '0',
     cleanup_chunk_max_age_hours: '24',
+    // Local sync cache: total size limit in GB (0 = unlimited)
+    cache_max_gb: '0',
     // Notification triggers ('1' = on)
     notify_admin_email: '',
     notify_on_upload: '1',

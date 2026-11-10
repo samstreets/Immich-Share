@@ -6,7 +6,7 @@ const { getDb } = require('../db');
 const { requireAuth } = require('../middleware/auth');
 const { assertSafeWebhookUrl } = require('../urlGuard');
 const { generateQR, matrixToSVG } = require('../qr');
-const { syncShare, isSyncing, purgeShareCache, sweepOrphans } = require('../localCache');
+const { syncShare, isSyncing, purgeShareCache, sweepOrphans, enforceLimits } = require('../localCache');
 
 const router = express.Router();
 
@@ -66,6 +66,14 @@ function generateAccessToken() {
   return crypto.randomBytes(32).toString('hex');
 }
 
+// Per-share cache cap in GB: empty/null/0 -> null (no cap), invalid -> undefined
+function parseCap(v) {
+  if (v === undefined || v === null || v === '') return null;
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0) return undefined;
+  return n === 0 ? null : n;
+}
+
 // List all shares
 router.get('/', (req, res) => {
   const db = getDb();
@@ -95,7 +103,7 @@ router.get('/', (req, res) => {
     SELECT id, slug, name, description, share_type, immich_album_id, immich_tag_id,
            expires_at, allow_download, allow_upload, show_metadata, show_location,
            upload_tag_ids, watch_tag_ids,
-           local_sync, local_sync_at, local_sync_error,
+           local_sync, local_sync_at, local_sync_error, local_sync_max_gb,
            access_token, max_views, webhook_url, notify_email,
            view_count, created_at, updated_at, is_active
     FROM shares ${where} ORDER BY created_at DESC
@@ -106,6 +114,10 @@ router.get('/', (req, res) => {
   const cachedCounts = new Map(db.prepare(
     'SELECT share_id, COUNT(*) AS n FROM share_cached_assets GROUP BY share_id'
   ).all().map(r => [r.share_id, r.n]));
+  const cacheBytes = new Map(db.prepare(`
+    SELECT s.share_id, COALESCE(SUM(c.bytes), 0) AS n FROM share_cached_assets s
+    JOIN cached_assets c ON c.asset_id = s.asset_id GROUP BY s.share_id
+  `).all().map(r => [r.share_id, r.n]));
   const pendingCounts = new Map(db.prepare(
     'SELECT share_id, COUNT(*) AS n FROM pending_uploads GROUP BY share_id'
   ).all().map(r => [r.share_id, r.n]));
@@ -113,6 +125,7 @@ router.get('/', (req, res) => {
   const sharesWithLinks = shares.map(s => ({
     ...s,
     local_cached_count: cachedCounts.get(s.id) || 0,
+    local_cache_bytes: cacheBytes.get(s.id) || 0,
     local_pending_uploads: pendingCounts.get(s.id) || 0,
     local_syncing: isSyncing(s.id),
     shareUrl: shareUrl(externalUrl, s),
@@ -279,6 +292,7 @@ router.post('/', async (req, res) => {
     show_metadata,
     show_location,
     local_sync,
+    local_sync_max_gb,
     upload_tag_ids: rawUploadTagIds,
     watch_tag_ids: rawWatchTagIds,
     slug: rawSlug,
@@ -326,6 +340,9 @@ router.post('/', async (req, res) => {
     return res.status(400).json({ error: err.message });
   }
 
+  const cacheCap = parseCap(local_sync_max_gb);
+  if (cacheCap === undefined) return res.status(400).json({ error: 'Cache size limit must be a positive number of GB or empty' });
+
   // Validate max_views
   const maxViews = max_views ? parseInt(max_views, 10) : null;
   if (maxViews !== null && (isNaN(maxViews) || maxViews < 1)) {
@@ -346,8 +363,8 @@ router.post('/', async (req, res) => {
       INSERT INTO shares (
         id, slug, name, description, share_type, immich_album_id, immich_tag_id,
         password_hash, expires_at, allow_download, allow_upload, show_metadata, show_location,
-        upload_tag_ids, watch_tag_ids, max_views, webhook_url, notify_email, local_sync
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        upload_tag_ids, watch_tag_ids, max_views, webhook_url, notify_email, local_sync, local_sync_max_gb
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id, slug, name, description || null, share_type,
       immich_album_id || null,
@@ -364,6 +381,7 @@ router.post('/', async (req, res) => {
       webhook_url || null,
       notify_email || null,
       local_sync ? 1 : 0,
+      cacheCap,
     );
   } catch (err) {
     if (err.message.includes('UNIQUE constraint failed: shares.slug')) {
@@ -390,7 +408,7 @@ router.patch('/:id', async (req, res) => {
 
   const {
     name, description, password, expires_at,
-    allow_download, allow_upload, show_metadata, show_location, is_active, local_sync,
+    allow_download, allow_upload, show_metadata, show_location, is_active, local_sync, local_sync_max_gb,
     upload_tag_ids: rawUploadTagIds,
     watch_tag_ids: rawWatchTagIds,
     slug: rawSlug,
@@ -441,6 +459,8 @@ router.patch('/:id', async (req, res) => {
   const updatedLocation    = show_location !== undefined ? (show_location ? 1 : 0) : share.show_location;
   const updatedActive      = is_active !== undefined ? (is_active ? 1 : 0) : share.is_active;
   const updatedLocalSync   = local_sync !== undefined ? (local_sync ? 1 : 0) : share.local_sync;
+  const updatedCacheCap    = local_sync_max_gb !== undefined ? parseCap(local_sync_max_gb) : share.local_sync_max_gb;
+  if (updatedCacheCap === undefined) return res.status(400).json({ error: 'Cache size limit must be a positive number of GB or empty' });
   const updatedWebhook     = webhook_url !== undefined ? (webhook_url || null) : share.webhook_url;
   const updatedEmail       = notify_email !== undefined ? (notify_email || null) : share.notify_email;
 
@@ -477,6 +497,7 @@ router.patch('/:id', async (req, res) => {
         webhook_url = ?,
         notify_email = ?,
         local_sync = ?,
+        local_sync_max_gb = ?,
         updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).run(
@@ -484,7 +505,7 @@ router.patch('/:id', async (req, res) => {
       updatedExpiresAt, updatedDownload, updatedUpload, updatedMetadata, updatedLocation,
       updatedExpiresAt, updatedExpiresAt,
       updatedUploadTagIds, updatedWatchTagIds, updatedActive,
-      maxViews, updatedWebhook, updatedEmail, updatedLocalSync,
+      maxViews, updatedWebhook, updatedEmail, updatedLocalSync, updatedCacheCap,
       req.params.id
     );
   } catch (err) {
@@ -495,7 +516,7 @@ router.patch('/:id', async (req, res) => {
   }
 
   if (share.local_sync && !updatedLocalSync) purgeShareCache(share.id);
-  else if (updatedLocalSync) syncShare(share.id);
+  else if (updatedLocalSync) { enforceLimits(); syncShare(share.id); }
 
   res.json({ message: 'Share updated' });
 });

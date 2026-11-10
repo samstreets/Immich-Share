@@ -636,6 +636,7 @@ function ShareModal({ onClose, onSaved, editShare }) {
     show_metadata: editShare?.show_metadata || false,
     show_location: editShare?.show_location || false,
     local_sync: !!editShare?.local_sync,
+    local_sync_max_gb: editShare?.local_sync_max_gb ?? '',
     upload_tag_ids: existingTagIds,
     watch_tag_ids: editShare?.watch_tag_ids
       ? editShare.watch_tag_ids.split(',').map(s => s.trim()).filter(Boolean)
@@ -703,6 +704,7 @@ function ShareModal({ onClose, onSaved, editShare }) {
             show_metadata: form.show_metadata,
             show_location: form.show_metadata && form.show_location,
             local_sync: form.local_sync,
+            local_sync_max_gb: form.local_sync_max_gb === '' ? null : form.local_sync_max_gb,
             upload_tag_ids: uploadTagIdsStr,
             slug: form.slug,
           },
@@ -724,6 +726,7 @@ function ShareModal({ onClose, onSaved, editShare }) {
             show_metadata: form.show_metadata,
             show_location: form.show_metadata && form.show_location,
             local_sync: form.local_sync,
+            local_sync_max_gb: form.local_sync_max_gb === '' ? undefined : form.local_sync_max_gb,
             upload_tag_ids: uploadTagIdsStr,
             slug: form.slug || undefined,
           },
@@ -947,6 +950,13 @@ function ShareModal({ onClose, onSaved, editShare }) {
                 so viewers are served locally. Uploads are saved here first, then sent to Immich (retried if Immich is
                 unreachable) and kept in the cache. Uses disk space on the data volume.
               </p>
+            )}
+            {form.local_sync && (
+              <div className="form-group">
+                <label>Max cache size for this share (GB, optional)</label>
+                <input type="number" min="0" step="0.5" value={form.local_sync_max_gb} onChange={e => set('local_sync_max_gb', e.target.value)} placeholder="No limit" style={{ width: 140 }} />
+                <span className="hint">Once reached, remaining originals are served from Immich instead. Leave empty for no per-share limit (the global limit in Settings still applies).</span>
+              </div>
             )}
 
             {/* Upload tags — only visible when uploads are enabled */}
@@ -1307,7 +1317,7 @@ export default function SharesPage() {
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: '0.72rem', fontWeight: 600, marginBottom: 10, color: share.local_sync_error ? 'var(--yellow, #facc15)' : 'var(--text-dim)' }}>
                         <span>💾 Local sync:{' '}
                           {share.local_syncing ? 'syncing…'
-                            : share.local_sync_at ? `${share.local_cached_count} item${share.local_cached_count !== 1 ? 's' : ''}, last synced ${new Date(share.local_sync_at.replace(' ', 'T') + 'Z').toLocaleString()}`
+                            : share.local_sync_at ? `${share.local_cached_count} item${share.local_cached_count !== 1 ? 's' : ''} · ${(share.local_cache_bytes / 1024 ** 3).toFixed(2)} GB${share.local_sync_max_gb ? ` of ${share.local_sync_max_gb} GB` : ''}, last synced ${new Date(share.local_sync_at.replace(' ', 'T') + 'Z').toLocaleString()}`
                             : 'waiting for first sync'}
                         </span>
                         {share.local_pending_uploads > 0 && <span>⏳ {share.local_pending_uploads} upload{share.local_pending_uploads !== 1 ? 's' : ''} waiting for Immich</span>}

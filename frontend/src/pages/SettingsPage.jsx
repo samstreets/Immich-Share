@@ -432,6 +432,12 @@ export default function SettingsPage() {
   const [cleanupMsg, setCleanupMsg] = useState(null)
   const [cleanupSaving, setCleanupSaving] = useState(false)
 
+  // Local sync cache
+  const [cacheMaxGb, setCacheMaxGb] = useState('0')
+  const [cacheUsage, setCacheUsage] = useState(null)
+  const [cacheMsg, setCacheMsg] = useState(null)
+  const [cacheSaving, setCacheSaving] = useState(false)
+
   useEffect(() => {
     async function load() {
       try {
@@ -454,6 +460,8 @@ export default function SettingsPage() {
         setNotify(Object.fromEntries(Object.entries(NOTIFY_DEFAULTS).map(([k, d]) => [k, s[k] ?? d])))
         setCleanupExpired(s.cleanup_expired_shares || '0')
         setChunkMaxAge(s.cleanup_chunk_max_age_hours || '24')
+        setCacheMaxGb(s.cache_max_gb || '0')
+        api('/admin/cache-usage').then(setCacheUsage).catch(() => {})
       } catch (e) { console.error(e) }
       finally { setLoading(false) }
     }
@@ -556,6 +564,16 @@ export default function SettingsPage() {
       setNotifyMsg({ type: 'success', text: 'Notification triggers saved.' })
     } catch (err) { setNotifyMsg({ type: 'error', text: err.message }) }
     finally { setNotifySaving(false) }
+  }
+
+  async function saveCache() {
+    setCacheSaving(true); setCacheMsg(null)
+    try {
+      await api('/admin/settings', { method: 'PUT', body: { cache_max_gb: cacheMaxGb === '' ? '0' : cacheMaxGb } })
+      setCacheMsg({ type: 'success', text: 'Cache limit saved. It is applied now: originals are trimmed if you lowered it, or filled in if you raised it.' })
+      setTimeout(() => api('/admin/cache-usage').then(setCacheUsage).catch(() => {}), 2000)
+    } catch (err) { setCacheMsg({ type: 'error', text: err.message }) }
+    finally { setCacheSaving(false) }
   }
 
   async function saveCleanup() {
@@ -781,6 +799,25 @@ export default function SettingsPage() {
             )}
             <button type="button" className="btn btn-primary btn-sm" onClick={saveNotify} disabled={notifySaving} style={{ marginTop: 6 }}>
               {notifySaving ? <span className="loading-spinner" /> : 'Save'}
+            </button>
+          </SectionCard>
+
+          {/* Local sync cache */}
+          <SectionCard icon={<CleanupIcon />} title="Local Sync Cache" subtitle="Disk space used by shares with “Keep synced locally”" accent="var(--blue)">
+            <Msg msg={cacheMsg} />
+            <p style={{ fontSize: '0.76rem', color: 'var(--text-muted)', marginBottom: 14, lineHeight: 1.6 }}>
+              {cacheUsage
+                ? <>Currently using <strong>{(cacheUsage.totalBytes / 1024 ** 3).toFixed(2)} GB</strong>{cacheUsage.limitBytes ? <> of {(cacheUsage.limitBytes / 1024 ** 3).toFixed(0)} GB</> : ' (no limit)'}.</>
+                : 'Loading usage…'}
+              {' '}When the limit is reached, originals stop being cached and are served from Immich instead. Thumbnails and previews are always cached. You can also set a limit per share when editing it.
+            </p>
+            <div className="form-group">
+              <label>Total Cache Limit (GB)</label>
+              <input type="number" min="0" step="1" value={cacheMaxGb} onChange={e => setCacheMaxGb(e.target.value)} style={{ width: 120 }} />
+              <span className="hint">0 = unlimited. Lowering the limit deletes cached originals (newest first) until it fits.</span>
+            </div>
+            <button type="button" className="btn btn-primary btn-sm" onClick={saveCache} disabled={cacheSaving}>
+              {cacheSaving ? <span className="loading-spinner" /> : 'Save'}
             </button>
           </SectionCard>
 

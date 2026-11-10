@@ -42,6 +42,8 @@ router.put('/settings', async (req, res) => {
     'global_webhook_url', 'global_webhook_secret',
     // Cleanup
     'cleanup_expired_shares', 'cleanup_chunk_max_age_hours',
+    // Local sync cache
+    'cache_max_gb',
     // Notification triggers
     'notify_admin_email', 'notify_on_upload', 'notify_on_first_view', 'notify_on_view_limit',
     'notify_on_password_failed', 'notify_on_expiry_reminder', 'notify_on_expired',
@@ -60,9 +62,23 @@ router.put('/settings', async (req, res) => {
   });
 
   const updates = Object.entries(req.body).filter(([k]) => allowed.includes(k));
+  const limitUpdate = updates.find(([k]) => k === 'cache_max_gb');
+  if (limitUpdate) {
+    const n = Number(limitUpdate[1]);
+    if (!Number.isFinite(n) || n < 0) return res.status(400).json({ error: 'Cache size limit must be 0 (unlimited) or a positive number of GB' });
+    limitUpdate[1] = String(n);
+  }
   updateMany(updates);
+  // Apply a changed limit right away (trim if lowered, fill if raised)
+  if (limitUpdate) require('../localCache').runLocalSync();
 
   res.json({ message: 'Settings saved' });
+});
+
+// Local sync cache usage
+router.get('/cache-usage', (req, res) => {
+  const { cacheUsage } = require('../localCache');
+  res.json(cacheUsage());
 });
 
 // Test Immich connection

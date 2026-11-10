@@ -187,6 +187,7 @@ Tick **Keep synced locally** on a share to copy its album (thumbnails, previews 
 
 - **Sync:** runs on creation/enable, then every `LOCAL_SYNC_INTERVAL_MS` (default 5 min), or on demand with **Sync now**. New assets are downloaded, changed ones refreshed, and assets removed from the album are deleted from the cache. Until the first sync finishes the share is served from Immich as before; any file that failed to cache falls back to Immich.
 - **Uploads:** when uploads are enabled, a file is saved to the local cache first, shown in the gallery straight away, and forwarded to Immich in the background (added to the album and tagged as usual). If Immich is down it stays queued and is retried every cycle. Once Immich accepts it the local copy is kept as the cached original.
+- **Size limits:** set a **total cache limit** under Settings → Local Sync Cache (0 = unlimited) and, optionally, a **per-share limit** when editing a share (handy for one 10–20 GB album while others stay small). Both are changeable at any time. Thumbnails and previews are always cached; once a limit is reached, remaining originals are served from Immich instead. Lowering a limit deletes cached originals (newest first) until it fits; raising it fills in the rest on the next sync.
 - **Storage:** files live under `/app/data/cache` (inside the `immich-share-data` volume). Turning local sync off, deleting the share or removing assets frees the space. Size ≈ the full size of the album's originals, so check free disk space first.
 
 ### Notifications

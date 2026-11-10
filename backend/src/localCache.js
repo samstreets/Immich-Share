@@ -140,29 +140,62 @@ async function _syncShare(shareId) {
     });
   })();
 
-  // Download missing / changed files
+  // Download missing / changed files in two passes: thumbnails + previews for everything
+  // first (small, always cached), then originals while within the size limits.
   let failed = 0;
-  const queue = assets.filter(a => UUID_RE.test(a.id));
-  async function worker() {
-    while (queue.length) {
-      const a = queue.shift();
-      const prev = getRow.get(a.id);
-      const changed = prev?.checksum && a.checksum && prev.checksum !== a.checksum;
-      for (const kind of Object.keys(KINDS)) {
-        const file = assetFile(a.id, kind);
-        if (!changed && fs.existsSync(file)) continue;
-        try {
-          const mime = await cacheKind(a.id, kind);
-          if (mime) setMime(KINDS[kind].mimeCol).run(mime, a.id);
-        } catch (err) {
-          failed++;
-          console.error(`[local-sync] ${shareId} ${a.id} ${kind}: ${err.message}`);
+  let skippedForSize = 0;
+  const valid = assets.filter(a => UUID_RE.test(a.id));
+  const changedIds = new Set(valid.filter(a => {
+    const prev = getRow.get(a.id);
+    return prev?.checksum && a.checksum && prev.checksum !== a.checksum;
+  }).map(a => a.id));
+
+  async function runPass(kinds, canCache) {
+    const queue = [...valid];
+    async function worker() {
+      while (queue.length) {
+        const a = queue.shift();
+        for (const kind of kinds) {
+          if (!changedIds.has(a.id) && fs.existsSync(assetFile(a.id, kind))) continue;
+          const expected = Number(a.exifInfo?.fileSizeInByte) || 0;
+          if (canCache && !canCache(expected)) { skippedForSize++; continue; }
+          try {
+            const mime = await cacheKind(a.id, kind);
+            if (mime) setMime(KINDS[kind].mimeCol).run(mime, a.id);
+          } catch (err) {
+            failed++;
+            console.error(`[local-sync] ${shareId} ${a.id} ${kind}: ${err.message}`);
+          }
         }
       }
-      if (changed) db.prepare('UPDATE cached_assets SET checksum = ? WHERE asset_id = ?').run(a.checksum, a.id);
+    }
+    await Promise.all(Array.from({ length: CONCURRENCY }, worker));
+  }
+
+  await runPass(['thumbnail', 'preview'], null);
+
+  // Budget for originals: remaining room under the global and per-share limits.
+  // Space is reserved up front so parallel downloads can't overshoot.
+  const globalLimit = globalLimitBytes();
+  const shareLimit = share.local_sync_max_gb > 0 ? share.local_sync_max_gb * GB : 0;
+  refreshAllBytes(valid.map(a => a.id));
+  let globalUsed = cacheUsage().totalBytes;
+  let shareUsed = shareBytes(shareId);
+  await runPass(['original'], (size) => {
+    const need = size || UNKNOWN_SIZE_GUESS;
+    if (globalLimit && globalUsed + need > globalLimit) return false;
+    if (shareLimit && shareUsed + need > shareLimit) return false;
+    globalUsed += need; shareUsed += need;
+    return true;
+  });
+
+  for (const id of valid.map(a => a.id)) {
+    if (changedIds.has(id)) {
+      const a = assets.find(x => x.id === id);
+      db.prepare('UPDATE cached_assets SET checksum = ? WHERE asset_id = ?').run(a.checksum, id);
     }
   }
-  await Promise.all(Array.from({ length: CONCURRENCY }, worker));
+  refreshAllBytes(valid.map(a => a.id));
 
   // Drop assets that left the album/tag. Rows less than 5 minutes old (just-forwarded
   // uploads Immich may not list yet) are left alone and re-checked next cycle.
@@ -180,9 +213,12 @@ async function _syncShare(shareId) {
 
   db.prepare(`
     UPDATE shares SET local_sync_at = CURRENT_TIMESTAMP, local_sync_error = ? WHERE id = ?
-  `).run(failed ? `${failed} file(s) could not be cached; they are served from Immich` : null, shareId);
+  `).run([
+    failed ? `${failed} file(s) could not be cached` : '',
+    skippedForSize ? `${skippedForSize} original(s) not cached (size limit reached)` : '',
+  ].filter(Boolean).join('; ') || null, shareId);
 
-  console.log(`[local-sync] "${share.name}": ${assets.length} asset(s), ${removed} removed, ${failed} failed`);
+  console.log(`[local-sync] "${share.name}": ${assets.length} asset(s), ${removed} removed, ${failed} failed, ${skippedForSize} over limit`);
 }
 
 /** Delete cached files/rows for assets no share references, and orphaned pending files. */
@@ -211,6 +247,76 @@ function purgeShareCache(shareId) {
   db.prepare('DELETE FROM pending_uploads WHERE share_id = ?').run(shareId);
   db.prepare('UPDATE shares SET local_sync_at = NULL, local_sync_error = NULL WHERE id = ?').run(shareId);
   sweepOrphans();
+}
+
+
+// ── Size limits ───────────────────────────────────────────────────────────────
+
+const GB = 1024 * 1024 * 1024;
+const UNKNOWN_SIZE_GUESS = 20 * 1024 * 1024;
+
+function globalLimitBytes() {
+  const row = getDb().prepare("SELECT value FROM settings WHERE key = 'cache_max_gb'").get();
+  const gb = Number(row?.value);
+  return Number.isFinite(gb) && gb > 0 ? gb * GB : 0;
+}
+
+function refreshAllBytes(ids) {
+  const db = getDb();
+  const set = db.prepare('UPDATE cached_assets SET bytes = ? WHERE asset_id = ?');
+  db.transaction(() => {
+    for (const id of ids) {
+      let n = 0;
+      for (const kind of Object.keys(KINDS)) {
+        try { n += fs.statSync(assetFile(id, kind)).size; } catch {}
+      }
+      set.run(n, id);
+    }
+  })();
+}
+
+function shareBytes(shareId) {
+  return getDb().prepare(`
+    SELECT COALESCE(SUM(c.bytes), 0) AS n FROM share_cached_assets s
+    JOIN cached_assets c ON c.asset_id = s.asset_id WHERE s.share_id = ?
+  `).get(shareId).n;
+}
+
+/** { totalBytes, limitBytes } for the whole cache (limitBytes 0 = unlimited). */
+function cacheUsage() {
+  const totalBytes = getDb().prepare('SELECT COALESCE(SUM(bytes), 0) AS n FROM cached_assets').get().n;
+  return { totalBytes, limitBytes: globalLimitBytes() };
+}
+
+// Delete cached originals (newest first) from `rows` until `used` fits within `limit`.
+function trimOriginals(rows, used, limit) {
+  const db = getDb();
+  for (const r of rows) {
+    if (used <= limit) break;
+    let size = 0;
+    try { size = fs.statSync(assetFile(r.asset_id, 'original')).size; fs.rmSync(assetFile(r.asset_id, 'original')); }
+    catch { continue; }
+    used -= size;
+    db.prepare('UPDATE cached_assets SET bytes = MAX(0, bytes - ?) WHERE asset_id = ?').run(size, r.asset_id);
+  }
+  return used;
+}
+
+/** Trim cached originals if a limit was lowered. Thumbnails/previews are never trimmed. */
+function enforceLimits() {
+  const db = getDb();
+  const orderedFor = (where, ...args) => db.prepare(`
+    SELECT DISTINCT c.asset_id, c.cached_at FROM cached_assets c
+    JOIN share_cached_assets s ON s.asset_id = c.asset_id ${where}
+    ORDER BY c.cached_at DESC
+  `).all(...args);
+
+  const shares = db.prepare('SELECT id, local_sync_max_gb FROM shares WHERE local_sync = 1 AND local_sync_max_gb > 0').all();
+  for (const sh of shares) {
+    trimOriginals(orderedFor('WHERE s.share_id = ?', sh.id), shareBytes(sh.id), sh.local_sync_max_gb * GB);
+  }
+  const limit = globalLimitBytes();
+  if (limit) trimOriginals(orderedFor(''), cacheUsage().totalBytes, limit);
 }
 
 // ── Reading from the cache ────────────────────────────────────────────────────
@@ -441,9 +547,9 @@ async function forwardPending(row) {
     };
     db.transaction(() => {
       db.prepare(`
-        INSERT INTO cached_assets (asset_id, type, filename, orig_mime, meta) VALUES (?, ?, ?, ?, ?)
+        INSERT INTO cached_assets (asset_id, type, filename, orig_mime, meta, bytes) VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(asset_id) DO UPDATE SET orig_mime = COALESCE(cached_assets.orig_mime, excluded.orig_mime)
-      `).run(assetId, meta.type, row.filename, row.mime, JSON.stringify(meta));
+      `).run(assetId, meta.type, row.filename, row.mime, JSON.stringify(meta), row.size || 0);
       const max = db.prepare('SELECT COALESCE(MAX(sort_order), -1) AS m FROM share_cached_assets WHERE share_id = ?').get(share.id).m;
       db.prepare('INSERT OR IGNORE INTO share_cached_assets (share_id, asset_id, sort_order) VALUES (?, ?, ?)')
         .run(share.id, assetId, max + 1);
@@ -477,6 +583,7 @@ async function runLocalSync() {
   try {
     ensureDirs();
     await processPending();
+    enforceLimits();
     const shares = getDb().prepare(`
       SELECT id FROM shares
       WHERE local_sync = 1 AND is_active = 1
@@ -499,6 +606,6 @@ function startLocalSync() {
 
 module.exports = {
   startLocalSync, runLocalSync, syncShare, isSyncing, isLocalReady, purgeShareCache, sweepOrphans,
-  localHasAsset, getCachedFile, listLocalAssets, sendCached,
+  localHasAsset, getCachedFile, cacheUsage, enforceLimits, listLocalAssets, sendCached,
   enqueueUpload, processPending,
 };
